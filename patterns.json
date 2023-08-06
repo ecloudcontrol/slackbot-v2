@@ -1,8 +1,6 @@
 {
   "patterns": [
-    "Prod\\s-\\sFull\\sNode\\sDown\\s-\\sProd\\s(\\w+)\\s(\\w+)",
-    "CloudWatch Alarm | Bitcoin-Target-Group-Unhealthy-Hosts | us-west-2 | Account: 641754881946",
-    "CloudWatch\\sAlarm\\s\\|\\sApisServerELB-high-requests\\s\\|\\s(\\w+)",
-    "hi"
+    "(^\\*<(.+\\n)+(.+))",
+    "(Issue)(.+)\\n(.+)\\n(.+)"
   ]
 }
