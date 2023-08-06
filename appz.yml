@@ -11,6 +11,7 @@ build:
 deploy: 
   context: ecloudcontrol/DEV
   replicas: 1
+  ingress: none
 properties:
   APP_TOKEN:
     vault: APP_TOKEN
