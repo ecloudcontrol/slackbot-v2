@@ -73,9 +73,9 @@ def extract_triggered_message(original_message):
 def is_triggered_message_cached(triggered_message, original_message):
     if "Issue" in original_message:
         if triggered_message in recent_messages_cache:
-            timestamp = recent_messages_cache[triggered_message]
-            if (datetime.now() - timestamp) <= timedelta(minutes=5):
-                logger.info("{}".format("Triggered within 5mins"))
+            timestamp = recent_messages_cache[triggered_message]['time']
+            if (datetime.now() - timestamp) <= timedelta(minutes=15):
+                logger.info("{}".format("Triggered within 15mins"))
                 return True
             else:
                 del recent_messages_cache[triggered_message]
@@ -85,7 +85,7 @@ def is_triggered_message_cached(triggered_message, original_message):
             return False
     elif "Triggered" in original_message:
         if triggered_message in recent_messages_cache:
-            timestamp = recent_messages_cache[triggered_message]
+            timestamp = recent_messages_cache[triggered_message]['time']
             if (datetime.now() - timestamp) <= timedelta(minutes=60):
                 logger.info("{}".format("Triggered within 1hr"))
                 return True
@@ -98,10 +98,15 @@ def is_triggered_message_cached(triggered_message, original_message):
     else:
         return False
 
-def update_recent_messages_cache(triggered_message):
+def update_recent_messages_cache(triggered_message, unstable=False):
     # Update the cache with the current timestamp and recovery status for the triggered message
-    recent_messages_cache[triggered_message] = (datetime.now())
-
+    if triggered_message not in recent_messages_cache:
+        recent_messages_cache[triggered_message] = {}
+        recent_messages_cache[triggered_message]['time'] = datetime.now()
+        recent_messages_cache[triggered_message]['trigger_count'] = 1
+    else:
+        recent_messages_cache[triggered_message]['time'] = datetime.now()
+        recent_messages_cache[triggered_message]['trigger_count'] += 1 if unstable else 0
 def reset_sequence(triggered_message):
     try:
         logger.info("Popping message: {}".format(triggered_message))
@@ -111,8 +116,9 @@ def reset_sequence(triggered_message):
     except Exception as err:
         logger.error("{}".format(err))
 
-def send_message_to_channel(app, logger, message, original_message, channel_name, target_channel_id):
+def send_message_to_channel(app, logger, message, original_message, channel_name, target_channel_id, triggers):
     triggered_message = extract_triggered_message(original_message)
+
     try:
         logger.info("sending message to target channel: {}".format(original_message))
         channel_id = message['channel']
@@ -144,7 +150,11 @@ def send_message_to_channel(app, logger, message, original_message, channel_name
                 unfurl_links=False
             )
             # Update the recent messages cache
-            update_recent_messages_cache(triggered_message)
+            if "started" in original_message and any(trigger in original_message for trigger in triggers):
+                triggered_message = extract_triggered_message(original_message)
+                update_recent_messages_cache(triggered_message, unstable=True)
+            else:
+                update_recent_messages_cache(triggered_message)
             logger.info("recent_messages_cache after update: {}".format(recent_messages_cache))
         else:
             # Post the message in the target channel without updating the cache
@@ -154,51 +164,49 @@ def send_message_to_channel(app, logger, message, original_message, channel_name
                 blocks=[
                     {
                         "type": "section",
-                        "text": {"type": "mrkdwn", "text": final_message},
-                        "accessory": {
-                            "type": "button",
-                            "text": {
-                                "type": "plain_text",
-                                "text": "Have you fixed it?"
-                            },
-                            "action_id": "button_click"
-                        }
+                        "text": {"type": "mrkdwn", "text": final_message} 
                     }
                 ],
                 unfurl_links=False
             )
             logger.info("Recovered or resolved message: {}".format(original_message))
-    except Exception as e:
-        # Handle exceptions or log them as needed
-        logger.error("Error sending message: {}".format(e))
-
-
+    except Exception:
+        logging.error("Exception handled, ", exc_info=True)
 
 def handle_filtered_message(message, client):
     # Get the original message text
     original_message = message['text']
-    triggered_message = ""
+    attachments = message.get('attachments', [])
+    title = attachments[0]['title'] if attachments else None
+    triggered_message = title if title else original_message
     channel_id = message['channel']
     channel_name = get_channel_name(channel_id)
     logger.info(f"Received message: {original_message}")
-    triggers = ["Triggered","started"]
-    recovers = ["Recovered","resolved"]
-
+    #triggers = ["Triggered"]
+    #recovers = ["Recovered","resolved"]
+    triggers = ["Disaster", "High"]
+    
     #for any trigger:
-    if any(trigger in original_message for trigger in triggers):
+    if "Triggered" in triggered_message or ("started" in original_message and any(trigger in original_message for trigger in triggers)):
         triggered_message = extract_triggered_message(original_message)
-        
         if not is_triggered_message_cached(triggered_message, original_message):
-            send_message_to_channel(app, logger, message, original_message, channel_name, target_channel_id)
+            send_message_to_channel(app, logger, message, original_message, channel_name, target_channel_id, triggers)
         else:
-            update_recent_messages_cache(triggered_message)
+            if "started" in original_message and any(trigger in original_message for trigger in triggers):
+                triggered_message = extract_triggered_message(original_message)
+                update_recent_messages_cache(triggered_message, unstable=True)
+            else:
+                update_recent_messages_cache(triggered_message)
             logger.info("recent_messages_cache after update: {}".format(recent_messages_cache))
 
-    elif  any(recover in original_message for recover in recovers):
+    elif "Recovered" in triggered_message or ("resolved" in original_message and any(trigger in original_message for trigger in triggers)):
         triggered_message = extract_triggered_message(original_message)
-        logger.info("Resetting message: {}".format(original_message))
-        reset_sequence(triggered_message)
-        send_message_to_channel(app, logger, message, original_message, channel_name, target_channel_id)
+        if "resolved" in original_message and any(trigger in original_message for trigger in triggers) and recent_messages_cache[triggered_message]['trigger_count'] < 3 :
+            logger.info("Skipping due to trigger count < 3: {}".format(recent_messages_cache[triggered_message]['trigger_count']))
+        else:
+            logger.info("Resetting message: {}".format(original_message))
+            reset_sequence(triggered_message)
+            send_message_to_channel(app, logger, message, original_message, channel_name, target_channel_id, triggers)
 
     logger.info("{}".format("Finished session"))
 
@@ -211,8 +219,6 @@ except Exception as err:
 else:
     app.debug = True
 
-
-#@app.message("hello")
 @app.message(re.compile("|".join(load_filter_patterns("/appz/scripts/webapps/patterns.json"))))
 def filter_messages(message, client):
     if message['channel'] in channel_ids:
