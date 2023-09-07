@@ -263,18 +263,20 @@ def action_button_click(body, ack, client):
 
 @app.event("message")
 def handle_message_events(body, logger, client):
-    logger.info("event_log: {}".format(body))
     event_data = body['event']
     event_channel = body['event']['channel'] 
     event_ts = body['event']['ts']
-    if 'attachments' in event_data:
+    if event_channel in channel_ids and 'attachments' in event_data:
         # Assuming there could be multiple attachments, process each one
         for attachment in event_data['attachments']:
             title = attachment.get('fallback', '') 
             #logger.info("title: {}".format(title))
             event_message = title
-            logger.info(f"event message: {event_message}")
-            handle_filtered_message(None, None, event_message, event_channel, event_ts)
+            if not any(re.search(pattern, event_message) for pattern in exclude_patterns) and any(re.search(pattern, event_message) for pattern in include_patterns):
+                logger.info(f"event message: {event_message}")
+                handle_filtered_message(None, None, event_message, event_channel, event_ts)
+            else:
+                logger.info("event_log: {}".format(body))
     else:
         logger.info("No 'events' found")
 
