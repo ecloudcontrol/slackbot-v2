@@ -60,16 +60,16 @@ def extract_triggered_message(original_message, pattern):
     
     if match1:
         match = match1
-        logger.info("Match output: {}".format(match.group(2)))
+        #logger.info("Match output: {}".format(match.group(2)))
         return match.group(2),match.group(3)
     elif match2:
         match = match2
-        logger.info("Match output: {}".format(match.group(2)))
+        #logger.info("Match output: {}".format(match.group(2)))
         return match.group(2), 'Issue'
 
 def is_triggered_message_cached(triggered_message, original_message):
     if "Issue" in original_message:
-        logger.info("{}".format("issue in original_message"))
+        #logger.info("{}".format("issue in original_message"))
         if triggered_message[1] in recent_messages_cache:
             if triggered_message[0] in recent_messages_cache[triggered_message[1]]:
                 logger.info("{}".format("issue in recent cache"))
@@ -182,14 +182,14 @@ def send_message_to_channel(app, logger, message, original_message, channel_name
 def handle_filtered_message(message, client, event_message, event_channel, event_ts):
     # Get the original message text
     if event_message:
-        logger.info(f"this is event: {event_message}")
+        #logger.info(f"this is event: {event_message}")
         triggered_message = event_message
         channel_id = event_channel
         message_ts = event_ts
         original_message = event_message
     else:
         original_message = message['text']
-        logger.info(f"normal message: {original_message}")
+        #logger.info(f"normal message: {original_message}")
         triggered_message = original_message
         channel_id = message['channel']
         message_ts = message['ts']
@@ -271,7 +271,7 @@ def handle_message_events(body, logger, client):
         # Assuming there could be multiple attachments, process each one
         for attachment in event_data['attachments']:
             title = attachment.get('fallback', '') 
-            logger.info("title: {}".format(title))
+            #logger.info("title: {}".format(title))
             event_message = title
             logger.info(f"event message: {event_message}")
             handle_filtered_message(None, None, event_message, event_channel, event_ts)
