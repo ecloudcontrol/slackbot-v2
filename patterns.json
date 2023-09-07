@@ -1,7 +1,7 @@
 {
   "include_patterns": [
     "(Issue)(.+)\\n(.+)\\n(.+)",
-    "(^\\*<(.+\\n)+(.+))"
+    "(Prod\\s-\\sFull\\sNode\\sDown\\s-\\sProd)"
   ],
   "exclude_patterns": [
     "(?:80|50)% Disk Space used on Volume\\s*/?\\s*Server\\s*:\\s*[\\w-]+",
