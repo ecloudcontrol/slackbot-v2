@@ -1,6 +1,11 @@
 {
-  "patterns": [
-    "(^\\*<(.+\\n)+(.+))",
-    "(Issue)(.+)\\n(.+)\\n(.+)"
+  "include_patterns": [
+    "(Issue)(.+)\\n(.+)\\n(.+)",
+    "(^\\*<(.+\\n)+(.+))"
+  ],
+  "exclude_patterns": [
+    "(?:80|50)% Disk Space used on Volume\\s*/?\\s*Server\\s*:\\s*[\\w-]+",
+    "(?:80|50)% RAM used on \\s*[\\w-]+",
+    "(?:80|50)% CPU utilization on \\s*[\\w-]+"
   ]
 }
