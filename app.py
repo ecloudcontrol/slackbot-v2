@@ -198,7 +198,10 @@ def handle_filtered_message(message, client, event_message, event_channel, event
     
     #for any trigger:
     if "Triggered" in triggered_message or ("started" in original_message and any(trigger in original_message for trigger in triggers)):
-        pattern = r'(Triggered:)(.+[ ](.+)[ ].+)'
+        if "prod parser is down" in original_message:
+            pattern = r'(Triggered:)(\s*([^\s]+)\s+(.+))'
+        else:
+            pattern = r'(Triggered:)(.+[ ](.+)[ ].+)'
         triggered_message = extract_triggered_message(original_message, pattern)
         if not is_triggered_message_cached(triggered_message, original_message):
             send_message_to_channel(app, logger, message, original_message, channel_name, target_channel_id, triggers, pattern, channel_id, message_ts)
@@ -211,7 +214,10 @@ def handle_filtered_message(message, client, event_message, event_channel, event
             logger.info("recent_messages_cache after update: {}".format(recent_messages_cache))
 
     elif "Recovered" in triggered_message or ("resolved" in original_message and any(trigger in original_message for trigger in triggers)):
-        pattern = r'(Recovered:)(.+[ ](.+))'
+        if "prod parser is down" in original_message:
+            pattern = r'(Recovered:)(\s*([^\s]+)\s+(.+))'
+        else:
+            pattern = r'(Recovered:)(.+[ ](.+))'
         triggered_message = extract_triggered_message(original_message,pattern)
         try:
             if "resolved" in original_message and any(trigger in original_message for trigger in triggers) and recent_messages_cache[triggered_message[1]][triggered_message[0]]['trigger_count'] < 3 :
