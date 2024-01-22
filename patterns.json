@@ -1,5 +1,6 @@
 {
   "include_patterns": [
+    "(prod\\sparser\\sis\\sdown)",
     "(Issue)(.+)\\n(.+)\\n(.+)",
     "(Prod\\s-\\sFull\\sNode\\sDown\\s-\\sProd)"
   ],
