@@ -200,6 +200,8 @@ def handle_filtered_message(message, client, event_message, event_channel, event
     if "Triggered" in triggered_message or ("started" in original_message and any(trigger in original_message for trigger in triggers)):
         if "prod parser is down" in original_message:
             pattern = r'(Triggered:)(\s*([^\s]+)\s+(.+))'
+        elif "increased lag on Kafka" in original_message:
+            pattern = r'(Triggered:)(\s*([\w]+)\s*(.+))'
         else:
             pattern = r'(Triggered:)(.+[ ](.+)[ ].+)'
         triggered_message = extract_triggered_message(original_message, pattern)
@@ -216,6 +218,8 @@ def handle_filtered_message(message, client, event_message, event_channel, event
     elif "Recovered" in triggered_message or ("resolved" in original_message and any(trigger in original_message for trigger in triggers)):
         if "prod parser is down" in original_message:
             pattern = r'(Recovered:)(\s*([^\s]+)\s+(.+))'
+        elif "increased lag on Kafka" in original_message:
+            pattern = r'(Recovered:)(\s*([\w]+)\s*(.+))'
         else:
             pattern = r'(Recovered:)(.+[ ](.+))'
         triggered_message = extract_triggered_message(original_message,pattern)
