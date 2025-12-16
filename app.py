@@ -1,5 +1,8 @@
 import os
-import logging, sys, re, json
+import logging
+import sys
+import re
+import json
 from datetime import datetime, timedelta
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
@@ -22,16 +25,12 @@ python_encoding = os.environ.get("PYTHONIOENCODING")
 
 if not app_token:
     logger.warning('APP_TOKEN not found in the vault.')
-
 if not bot_token:
     logger.warning('BOT_TOKEN not found in the vault.')
-
 if not target_channel_id:
     logger.warning('TARGET_CHANNEL_ID not found in env.')
-
 if not channel_ids:
     logger.warning('CHANNEL_IDS not found in env.')
-
 if not all([app_token, bot_token, target_channel_id, channel_ids]):
     logger.warning('Missing required environment variables. Aborting...')
     sys.exit(1)
@@ -52,22 +51,56 @@ def get_channel_name(channel_id):
     response = app.client.conversations_info(channel=channel_id)
     return response['channel']['name']
 
-def extract_triggered_message(original_message, pattern):
+def extract_triggered_message(original_message, pattern=None):
     # Extract the Triggered message from the original message
     logger.info("{}".format("Matching message"))
-    match1 = re.search(pattern, original_message)
-    match2 = re.search(r'(Name:(.+\n.+)())', original_message)
     
-    if match1:
-        match = match1
-        #logger.info("Match output: {}".format(match.group(2)))
-        return match.group(2),match.group(3)
-    elif match2:
-        match = match2
-        #logger.info("Match output: {}".format(match.group(2)))
-        return match.group(2), 'Issue'
+    # Handle each include pattern specifically for stable keys
+    # 1. Prod parser down: (prod\\sparser\\sis\\sdown) -> extract parser ID
+    if re.search(r'prod\s+parser\s+is\s+down', original_message):
+        match = re.search(r'([^\s]+)\s+prod parser is down', original_message)
+        if match:
+            return match.group(1), "PROD_PARSER"
+    
+    # 2. Issue: (Issue)(.+)\\n(.+)\\n(.+) -> use first post-newline group as desc, "Issue" as type
+    if "Issue" in original_message:
+        issue_pattern = r'(Issue)(.+)\n(.+)\n(.+)'
+        match = re.search(issue_pattern, original_message)
+        if match:
+            desc = match.group(2).strip()  # First .+ after Issue
+            return desc, "Issue"
+    
+    # 3. Prod Full Node Down: (Prod\\s-\\sFull\\sNode\\sDown\\s-\\sProd) -> fixed type
+    if re.search(r'Prod\s-\sFull\sNode\sDown\s-\sProd', original_message):
+        return "full-node", "PROD_NODE_DOWN"  # Stable key
+    
+    # 4. Kafka lag: (\\b\\w+\\s+increased\\s+lag\\s+on\\s+Kafka\\b) -> extract topic
+    if re.search(r'\b\w+\s+increased\s+lag\s+on\s+Kafka\b', original_message):
+        match = re.search(r'(\w+)\s+increased\s+lag\s+on\s+Kafka', original_message)
+        if match:
+            return match.group(1), "KAFKA_LAG"
+    
+    # 5. RDS CPU: (\[AWS\]\s+RDS\s+CPU\s+utilization\s+is\s+(?:high|back\s+to\s+normal)\s+on\s+dbinstanceidentifier:[\w-]+)
+    if "[AWS] RDS CPU utilization" in original_message:
+        rds_pattern = r'on\s+dbinstanceidentifier:([\w-]+)'
+        match = re.search(rds_pattern, original_message)
+        if match:
+            return match.group(1), "RDS_CPU"  # DB ID as desc, shared for high/normal
+    
+    # Fallback: Use provided pattern (e.g., for custom Triggered: lines)
+    if pattern:
+        match = re.search(pattern, original_message)
+        if match:
+            g2 = match.group(2) if len(match.groups()) >= 2 else ""
+            g3 = match.group(3) if len(match.groups()) >= 3 else "Generic"
+            return g2.strip(), g3
+    
+    return "", ""  # No match
 
 def is_triggered_message_cached(triggered_message, original_message):
+    if not triggered_message[0] or not triggered_message[1]:
+        return False  # Invalid extraction, don't cache
+    
     if "Issue" in original_message:
         #logger.info("{}".format("issue in original_message"))
         if triggered_message[1] in recent_messages_cache:
@@ -99,16 +132,19 @@ def is_triggered_message_cached(triggered_message, original_message):
         return False
 
 def update_recent_messages_cache(triggered_message, unstable=False):
+    if not triggered_message[0] or not triggered_message[1]:
+        return  # Invalid, skip
+    
     if triggered_message[1] not in recent_messages_cache:
         recent_messages_cache[triggered_message[1]] = {}
     if triggered_message[0] not in recent_messages_cache[triggered_message[1]]:
         recent_messages_cache[triggered_message[1]][triggered_message[0]] = {}
         recent_messages_cache[triggered_message[1]][triggered_message[0]]['time'] = datetime.now()
-        recent_messages_cache[triggered_message[1]][triggered_message[0]]['trigger_count'] = 0  # Initialize here
+        recent_messages_cache[triggered_message[1]][triggered_message[0]]['trigger_count'] = 0 # Initialize here
     if unstable:
         recent_messages_cache[triggered_message[1]][triggered_message[0]]['trigger_count'] += 1
         recent_messages_cache[triggered_message[1]][triggered_message[0]]['time'] = datetime.now()
-        
+       
 def reset_sequence(triggered_message, original_message):
     try:
         logger.info("Popping message: {}".format(triggered_message))
@@ -116,16 +152,13 @@ def reset_sequence(triggered_message, original_message):
             pop_value = recent_messages_cache.pop(triggered_message[1], 'Nothing to pop')
         else:
             pop_value = recent_messages_cache[triggered_message[1]].pop(triggered_message[0], 'Nothing to clear')
-
         logger.info("recent_messages_cache after reset: {}".format(recent_messages_cache))
         logger.info("Popped value: {}".format(pop_value))
     except Exception as err:
         logger.error("{}".format(err))
 
-
 def send_message_to_channel(app, logger, message, original_message, channel_name, target_channel_id, triggers, pattern, channel_id, message_ts):
     triggered_message = extract_triggered_message(original_message, pattern)
-
     try:
         logger.info("sending message to target channel: {}".format(original_message))
         response = app.client.chat_getPermalink(channel=channel_id, message_ts=message_ts)
@@ -133,8 +166,8 @@ def send_message_to_channel(app, logger, message, original_message, channel_name
         original_message_link = "<{}|View message>".format(original_message_permalink)
         channel_link = "<#{}|{}>".format(channel_id, channel_name)
         final_message = "{}\n Link: {}\n Channel: {}".format(original_message, original_message_link, channel_link)
-
-        if "Recovered" not in original_message and "resolved" not in original_message:
+        is_recovered = "Recovered" in original_message or "resolved" in original_message
+        if not is_recovered:
             # Post the message in the target channel and update the recent messages cache
             app.client.chat_postMessage(
                 channel=target_channel_id,
@@ -157,7 +190,6 @@ def send_message_to_channel(app, logger, message, original_message, channel_name
             )
             # Update the recent messages cache
             if "started" in original_message and any(trigger in original_message for trigger in triggers):
-                triggered_message = extract_triggered_message(original_message, pattern)
                 update_recent_messages_cache(triggered_message, unstable=True)
             else:
                 update_recent_messages_cache(triggered_message)
@@ -170,71 +202,88 @@ def send_message_to_channel(app, logger, message, original_message, channel_name
                 blocks=[
                     {
                         "type": "section",
-                        "text": {"type": "mrkdwn", "text": final_message} 
+                        "text": {"type": "mrkdwn", "text": final_message}
                     }
                 ],
                 unfurl_links=False
             )
             #logger.info("Recovered or resolved message: {}".format(original_message))
-    except Exception:
-        logging.error("Exception handled, ", exc_info=True)
+    except Exception as e:
+        logger.error("Exception in send_message_to_channel", exc_info=True)
 
 def handle_filtered_message(message, client, event_message, event_channel, event_ts):
     # Get the original message text
     if event_message:
         #logger.info(f"this is event: {event_message}")
-        triggered_message = event_message
+        alert_text = event_message
         channel_id = event_channel
         message_ts = event_ts
         original_message = event_message
     else:
         original_message = message['text']
         #logger.info(f"normal message: {original_message}")
-        triggered_message = original_message
+        alert_text = original_message
         channel_id = message['channel']
         message_ts = message['ts']
     channel_name = get_channel_name(channel_id)
     triggers = ["Disaster", "High"]
-    
-    #for any trigger:
-    if "Triggered" in triggered_message or ("started" in original_message and any(trigger in original_message for trigger in triggers)):
+   
+    # Extract key once for use in both branches
+    extracted_key = extract_triggered_message(original_message)
+    if not extracted_key[0]:
+        logger.info("No valid extraction, skipping")
+        return
+   
+    # For triggered or started
+    if "Triggered" in alert_text or ("started" in original_message and any(trigger in original_message for trigger in triggers)):
+        # Set pattern based on content (for fallback general matching)
         if "prod parser is down" in original_message:
             pattern = r'(Triggered:)(\s*([^\s]+)\s+(.+))'
         elif "increased lag on Kafka" in original_message:
             pattern = r'(Triggered:)(\s*([\w]+)\s*(.+))'
+        elif "[AWS] RDS CPU utilization" in original_message:
+            pattern = r'(Triggered:)(.+)'  # Fallback; extraction handled specially
+        elif re.search(r'Prod\s-\sFull\sNode\sDown\s-\sProd', original_message):
+            pattern = r'(Triggered:)(.+)'  # Fallback
         else:
             pattern = r'(Triggered:)(.+[ ](.+)[ ].+)'
-        triggered_message = extract_triggered_message(original_message, pattern)
-        if not is_triggered_message_cached(triggered_message, original_message):
+        
+        # Use extracted_key (already computed, specials handled)
+        if not is_triggered_message_cached(extracted_key, original_message):
             send_message_to_channel(app, logger, message, original_message, channel_name, target_channel_id, triggers, pattern, channel_id, message_ts)
         else:
             if "started" in original_message and any(trigger in original_message for trigger in triggers):
-                triggered_message = extract_triggered_message(original_message, pattern)
-                update_recent_messages_cache(triggered_message, unstable=True)
+                update_recent_messages_cache(extracted_key, unstable=True)
             else:
-                update_recent_messages_cache(triggered_message)
+                update_recent_messages_cache(extracted_key)
             logger.info("recent_messages_cache after update: {}".format(recent_messages_cache))
-
-    elif "Recovered" in triggered_message or ("resolved" in original_message and any(trigger in original_message for trigger in triggers)):
+    # For recovered or resolved
+    elif "Recovered" in alert_text or ("resolved" in original_message and any(trigger in original_message for trigger in triggers)):
+        # Set pattern for recovered (similar logic)
         if "prod parser is down" in original_message:
             pattern = r'(Recovered:)(\s*([^\s]+)\s+(.+))'
         elif "increased lag on Kafka" in original_message:
-            pattern = r'(Triggered:)(\s*([\w]+)\s*(.+))'
+            pattern = r'(Recovered:)(\s*([\w]+)\s*(.+))'
+        elif "[AWS] RDS CPU utilization" in original_message:
+            pattern = r'(Recovered:)(.+)'  # Fallback
+        elif re.search(r'Prod\s-\sFull\sNode\sDown\s-\sProd', original_message):
+            pattern = r'(Recovered:)(.+)'  # Fallback
         else:
             pattern = r'(Recovered:)(.+[ ](.+))'
-        triggered_message = extract_triggered_message(original_message,pattern)
+        
+        # Use extracted_key
         try:
-            if "resolved" in original_message and any(trigger in original_message for trigger in triggers) and recent_messages_cache[triggered_message[1]][triggered_message[0]]['trigger_count'] < 3 :
-                logger.info("Skipping due to trigger count < 3: {}".format(recent_messages_cache[triggered_message[1]][triggered_message[0]]['trigger_count']))
+            cache_entry = recent_messages_cache.get(extracted_key[1], {}).get(extracted_key[0], {})
+            trigger_count = cache_entry.get('trigger_count', 0)
+            if "resolved" in original_message and any(trigger in original_message for trigger in triggers) and trigger_count < 3:
+                logger.info("Skipping due to trigger count < 3: {}".format(trigger_count))
             else:
                 logger.info("Resetting message: {}".format(original_message))
-                reset_sequence(triggered_message, original_message)
+                reset_sequence(extracted_key, original_message)
                 send_message_to_channel(app, logger, message, original_message, channel_name, target_channel_id, triggers, pattern, channel_id, message_ts)
-        except Exception:
-            logging.error("Exception handled, ", exc_info=True)
-
+        except Exception as e:
+            logger.error("Exception in recovered handling", exc_info=True)
     logger.info("{}".format("Finished session"))
-
 
 try:
     app = App(token=bot_token)
@@ -245,7 +294,6 @@ else:
     app.debug = True
 
 include_patterns, exclude_patterns = load_filter_patterns("/appz/scripts/webapps/patterns.json")
-
 
 @app.message(re.compile("|".join(include_patterns)))
 def filter_messages(message, client):
@@ -260,10 +308,8 @@ def action_button_click(body, ack, client):
     # Acknowledge the action
     ack()
     app.logger.info(body)
-
     # Get the original message's timestamp
     original_timestamp = body["message"]["ts"]
-
     # Add a white check mark reaction to the original message
     client.reactions_add(
         channel=body["channel"]["id"],
@@ -274,12 +320,12 @@ def action_button_click(body, ack, client):
 @app.event("message")
 def handle_message_events(body, logger, client):
     event_data = body['event']
-    event_channel = body['event']['channel'] 
+    event_channel = body['event']['channel']
     event_ts = body['event']['ts']
     if event_channel in channel_ids and 'attachments' in event_data:
         # Assuming there could be multiple attachments, process each one
         for attachment in event_data['attachments']:
-            title = attachment.get('fallback', '') 
+            title = attachment.get('fallback', '')
             #logger.info("title: {}".format(title))
             event_message = title
             if not any(re.search(pattern, event_message) for pattern in exclude_patterns) and any(re.search(pattern, event_message) for pattern in include_patterns):
@@ -290,5 +336,5 @@ def handle_message_events(body, logger, client):
     else:
         logger.info("No 'events' found")
 
-if __name__ == "__main__": 
+if __name__ == "__main__":
     SocketModeHandler(app, app_token).start()
