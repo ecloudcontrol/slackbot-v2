@@ -320,21 +320,31 @@ def action_button_click(body, ack, client):
 @app.event("message")
 def handle_message_events(body, logger, client):
     event_data = body['event']
-    event_channel = body['event']['channel']
-    event_ts = body['event']['ts']
-    if event_channel in channel_ids and 'attachments' in event_data:
-        # Assuming there could be multiple attachments, process each one
-        for attachment in event_data['attachments']:
-            title = attachment.get('fallback', '')
-            #logger.info("title: {}".format(title))
-            event_message = title
-            if not any(re.search(pattern, event_message) for pattern in exclude_patterns) and any(re.search(pattern, event_message) for pattern in include_patterns):
-                logger.info(f"event message: {event_message}")
-                handle_filtered_message(None, None, event_message, event_channel, event_ts)
-            else:
-                logger.info("event_log: {}".format(body))
+    event_channel = event_data['channel']
+    event_ts = event_data['ts']
+    logger.info(f"EVENT DEBUG: ...")  # From above
+    
+    if event_channel not in channel_ids:
+        logger.info(f"Channel {event_channel} not monitored, skipping")
+        return
+    
+    # Extract text: Prefer attachments fallback, else event text
+    event_text = ""
+    if 'attachments' in event_data:
+        for att in event_data['attachments']:
+            event_text += att.get('fallback', '') + "\n"
+    elif 'text' in event_data:
+        event_text = event_data['text']
     else:
-        logger.info("No 'events' found")
+        logger.info("No text or attachments, skipping")
+        return
+    
+    # Check patterns on full text
+    if any(re.search(pat, event_text) for pat in include_patterns) and not any(re.search(pat, event_text) for pat in exclude_patterns):
+        logger.info(f"Event match: {event_text[:100]}...")
+        handle_filtered_message(None, None, event_text, event_channel, event_ts)
+    else:
+        logger.info("Event no match")
 
 if __name__ == "__main__":
     SocketModeHandler(app, app_token).start()
