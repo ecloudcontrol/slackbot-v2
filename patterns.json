@@ -8,21 +8,23 @@
 
     "(?i)(\\b\\w+\\s+increased\\s+lag\\s+on\\s+Kafka\\b)",
 
-    "(?i)(Triggered|Recovered|Warn):\\s*Signer\\s+error",
+    "(?i)(Triggered|Recovered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*Signer\\s+error",
 
-    "(?i)(Triggered|Recovered|Re-Triggered|Warn):\\s*Consolidation\\s+API\\s+Failure\\s*,?\\s*ENV\\s+PROD",
+    "(?i)(Triggered|Recovered|Re-Triggered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*Consolidation\\s+API\\s+Failure\\s*,?\\s*ENV\\s+PROD",
 
-    "(?i)(Triggered|Recovered|Warn):\\s*Chainparser\\s+decreased\\s+blocks\\s+sync\\s*\\(BNB\\)",
+    "(?i)(Triggered|Recovered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*Chainparser\\s+decreased\\s+blocks\\s+sync\\s*\\(BNB\\)",
 
-    "(?i)(Triggered|Recovered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*\\[AWS\\]\\s+RDS\\s+Freeable\\s+Memory\\s+Alert\\s+on\\s+dbinstanceidentifier:[\\w-]+",
+    "(?i)(Triggered|Recovered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*CPU\\s+Load\\s+is\\s+Very\\s+High\\s+on.*",
 
-    "(?i)(Triggered|Recovered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*\\[AWS\\]\\s+RDS\\s+CPU\\s+utilization\\s+is\\s+(?:high|back\\s+to\\s+normal)\\s+on\\s+dbinstanceidentifier:[\\w-]+",
+    "(?i)(Triggered|Recovered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*DB\\s+Load\\s+is\\s+Very\\s+High\\s+on.*",
+
+    "(?i)(Triggered|Recovered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*\\[AWS\\]\\s+RDS\\s+CPU\\s+utilization\\s+is\\s+high\\s+on\\s+dbinstanceidentifier:[\\w-]+",
 
     "(?i)(Triggered|Recovered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*\\[AWS\\]\\s+RDS\\s+Storage\\s+utilization\\s+is\\s+high\\s+on\\s+dbinstanceidentifier:[\\w-]+,engine:(?:mysql|MySQL)",
 
-    "(?i)(Triggered|Recovered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*\\[AWS\\]\\s+RDS\\s+Anomaly\\s+in\\s+database\\s+connections\\s+on\\s+dbinstanceidentifier:[\\w-]+",
+    "(?i)(Triggered|Recovered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*\\[AWS\\]\\s+RDS\\s+Freeable\\s+Memory\\s+Alert\\s+on\\s+dbinstanceidentifier:[\\w-]+",
 
-    "(?i)(Triggered|Recovered|Warn):\\s*CPU\\s+Load\\s+is\\s+Very\\s+High\\s+on.*"
+    "(?i)(Triggered|Recovered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*\\[AWS\\]\\s+RDS\\s+Anomaly\\s+in\\s+database\\s+connections\\s+on\\s+dbinstanceidentifier:[\\w-]+"
   ],
   "exclude_patterns": [
     "(?:80|50)% Disk Space used on Volume\\s*/?\\s*Server\\s*:\\s*[\\w-]+",
