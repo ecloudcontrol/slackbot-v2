@@ -24,7 +24,11 @@
 
     "(?i)(Triggered|Recovered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*\\[AWS\\]\\s+RDS\\s+Freeable\\s+Memory\\s+Alert\\s+on\\s+dbinstanceidentifier:[\\w-]+",
 
-    "(?i)(Triggered|Recovered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*\\[AWS\\]\\s+RDS\\s+Anomaly\\s+in\\s+database\\s+connections\\s+on\\s+dbinstanceidentifier:[\\w-]+"
+    "(?i)(Triggered|Recovered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*\\[AWS\\]\\s+RDS\\s+Anomaly\\s+in\\s+database\\s+connections\\s+on\\s+dbinstanceidentifier:[\\w-]+",
+
+    "(?i)(Triggered|Recovered|Re-Triggered):\\s*(?:\\[[A-Z]+\\]\\s*)*Load\\s+balancer\\s+TLS\\s+negotiation\\s+error",
+
+    "(?i)(Triggered|Recovered|Re-Triggered):?\\s*(?:\\[[A-Z]+\\]\\s*)*[A-Z0-9]+\\s+increased\\s+lag\\s+on\\s+Kafka"
   ],
   "exclude_patterns": [
     "(?:80|50)% Disk Space used on Volume\\s*/?\\s*Server\\s*:\\s*[\\w-]+",
