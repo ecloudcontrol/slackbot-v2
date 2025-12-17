@@ -1,25 +1,28 @@
 {
   "include_patterns": [
-    "(prod\\sparser\\sis\\sdown)",
-    "(Issue)(.+)\\n(.+)\\n(.+)",
-    "(Prod\\s-\\sFull\\sNode\\sDown\\s-\\sProd)",
-    "(\\b\\w+\\s+increased\\s+lag\\s+on\\s+Kafka\\b)",
+    "(?i)(prod\\s+parser\\s+is\\s+down)",
 
-    "(Triggered|Recovered):\\s*Signer\\s+error",
+    "(?i)(Issue)(.+)\\n(.+)\\n(.+)",
 
-    "(Triggered|Recovered|Re-Triggered):\\s*Consolidation\\s+API\\s+Failure\\s*,\\s*ENV\\s+PROD",
+    "(?i)(Prod\\s*-\\s*Full\\s*Node\\s*Down\\s*-\\s*Prod)",
 
-    "(Triggered|Recovered):\\s*Chainparser\\s+decreased\\s+blocks\\s+sync\\s*\\(BNB\\)",
+    "(?i)(\\b\\w+\\s+increased\\s+lag\\s+on\\s+Kafka\\b)",
 
-    "(Triggered|Recovered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*\\[AWS\\]\\s+RDS\\s+Freeable\\s+Memory\\s+Alert\\s+on\\s+dbinstanceidentifier:[\\w-]+",
+    "(?i)(Triggered|Recovered|Warn):\\s*Signer\\s+error",
 
-    "(Triggered|Recovered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*\\[AWS\\]\\s+RDS\\s+CPU\\s+utilization\\s+is\\s+high\\s+on\\s+dbinstanceidentifier:[\\w-]+",
+    "(?i)(Triggered|Recovered|Re-Triggered|Warn):\\s*Consolidation\\s+API\\s+Failure\\s*,?\\s*ENV\\s+PROD",
 
-    "(Triggered|Recovered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*\\[AWS\\]\\s+RDS\\s+Storage\\s+utilization\\s+is\\s+high\\s+on\\s+dbinstanceidentifier:[\\w-]+,engine:(?:mysql|MySQL)",
+    "(?i)(Triggered|Recovered|Warn):\\s*Chainparser\\s+decreased\\s+blocks\\s+sync\\s*\\(BNB\\)",
 
-    "(Triggered|Recovered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*\\[AWS\\]\\s+RDS\\s+Anomaly\\s+in\\s+database\\s+connections\\s+on\\s+dbinstanceidentifier:[\\w-]+",
+    "(?i)(Triggered|Recovered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*\\[AWS\\]\\s+RDS\\s+Freeable\\s+Memory\\s+Alert\\s+on\\s+dbinstanceidentifier:[\\w-]+",
 
-    "(Triggered|Recovered):\\s*CPU\\s+Load\\s+is\\s+Very\\s+High\\s+on\\b"
+    "(?i)(Triggered|Recovered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*\\[AWS\\]\\s+RDS\\s+CPU\\s+utilization\\s+is\\s+(?:high|back\\s+to\\s+normal)\\s+on\\s+dbinstanceidentifier:[\\w-]+",
+
+    "(?i)(Triggered|Recovered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*\\[AWS\\]\\s+RDS\\s+Storage\\s+utilization\\s+is\\s+high\\s+on\\s+dbinstanceidentifier:[\\w-]+,engine:(?:mysql|MySQL)",
+
+    "(?i)(Triggered|Recovered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*\\[AWS\\]\\s+RDS\\s+Anomaly\\s+in\\s+database\\s+connections\\s+on\\s+dbinstanceidentifier:[\\w-]+",
+
+    "(?i)(Triggered|Recovered|Warn):\\s*CPU\\s+Load\\s+is\\s+Very\\s+High\\s+on.*"
   ],
   "exclude_patterns": [
     "(?:80|50)% Disk Space used on Volume\\s*/?\\s*Server\\s*:\\s*[\\w-]+",
