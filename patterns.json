@@ -4,7 +4,14 @@
     "(Issue)(.+)\\n(.+)\\n(.+)",
     "(Prod\\s-\\sFull\\sNode\\sDown\\s-\\sProd)",
     "(\\b\\w+\\s+increased\\s+lag\\s+on\\s+Kafka\\b)",
-    "(Triggered|Recovered):\\s*(?:\\[[A-Z]+\\]\\s*)*\\[AWS\\]\\s+RDS\\s+CPU\\s+utilization\\s+is\\s+(?:high|back\\s+to\\s+normal)\\s+on\\s+dbinstanceidentifier:[\\w-]+"
+
+    "(Triggered|Recovered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*\\[AWS\\]\\s+RDS\\s+CPU\\s+utilization\\s+is\\s+high\\s+on\\s+dbinstanceidentifier:[\\w-]+",
+
+    "(Triggered|Recovered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*\\[AWS\\]\\s+RDS\\s+Storage\\s+utilization\\s+is\\s+high\\s+on\\s+dbinstanceidentifier:[\\w-]+,engine:mysql",
+
+    "(Triggered|Recovered):\\s*DB\\s+Load\\s+is\\s+Very\\s+High\\s+on\\b",
+
+    "(Triggered|Recovered):\\s*CPU\\s+Load\\s+is\\s+Very\\s+High\\s+on\\b"
   ],
   "exclude_patterns": [
     "(?:80|50)% Disk Space used on Volume\\s*/?\\s*Server\\s*:\\s*[\\w-]+",
