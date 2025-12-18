@@ -1,67 +1,44 @@
 {
   "include_patterns": [
-    "(?i)(prod\\s+parser\\s+is\\s+down)",
 
-    "(?i)(Issue)(.+)\\n(.+)\\n(.+)",
+    "(?i)prod\\s+parser\\s+is\\s+down",
+    "(?i)[a-z0-9_-]+\\s+prod\\s+parser\\s+is\\s+down",
+    "(?i)parser\\s+is\\s+down\\s+on\\s+source:[\\w-]+",
 
-    "(?i)(Prod\\s*-\\s*Full\\s*Node\\s*Down\\s*-\\s*Prod)",
+    "(?i)signer\\s+error",
+    "(?i)prod-\\s*signer\\s+is\\s+down",
 
-    "(?i)(\\b\\w+\\s+increased\\s+lag\\s+on\\s+Kafka\\b)",
+    "(?i)consolidation\\s+api\\s+failure\\s*,?\\s*env\\s+prod",
 
+    "(?i)load\\s+balancer\\s+latency\\s+increased",
+    "(?i)load\\s+balancer\\s+tls\\s+negotiation\\s+error",
+    "(?i)load\\s+balancer\\s+5xx\\s+errors",
+    "(?i)prod\\s+lb\\s+request\\s+count\\s+drop",
 
-    "(?i)(Triggered|Recovered|Re-Triggered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*Signer\\s+error",
+    "(?i)[a-z0-9_-]+\\s+increased\\s+lag\\s+on\\s+kafka",
+    "(?i)base\\s+prod\\s+increased\\s+lag",
 
-    "(?i)(Triggered|Recovered|Re-Triggered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*PROD-\\s*Signer\\s+is\\s+down",
+    "(?i)msk\\s+cpu\\s+system\\s+usage\\s+high\\s+on\\s+broker_id:\\d+",
 
-    "(?i)(Triggered|Recovered|Re-Triggered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*Consolidation\\s+API\\s+Failure\\s*,?\\s*ENV\\s+PROD",
+    "(?i)pods\\s+cpu\\s+utilization\\s+in\\s+k8s\\s+deployment\\s+on\\s+kube_deployment:[\\w-]+",
+    "(?i)pod\\s+restart\\s+for\\s+k8s\\s+deployments\\s+on\\s+kube_deployment:[\\w-]+",
 
+    "(?i)cpu\\s+load\\s+is\\s+very\\s+high\\s+on.*",
+    "(?i)db\\s+load\\s+is\\s+very\\s+high\\s+on.*",
 
-    "(?i)(Triggered|Recovered|Re-Triggered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*[A-Za-z0-9_-]+\\s+prod\\s+parser\\s+is\\s+down",
+    "(?i)\\[aws\\]\\s+rds\\s+cpu\\s+utilization\\s+is\\s+high\\s+on\\s+dbinstanceidentifier:[\\w-]+",
+    "(?i)\\[aws\\]\\s+rds\\s+storage\\s+utilization\\s+is\\s+high\\s+on\\s+dbinstanceidentifier:[\\w-]+,engine:(mysql|mysql)",
+    "(?i)\\[aws\\]\\s+rds\\s+freeable\\s+memory\\s+alert\\s+on\\s+dbinstanceidentifier:[\\w-]+",
+    "(?i)\\[aws\\]\\s+rds\\s+anomaly\\s+in\\s+database\\s+connections\\s+on\\s+dbinstanceidentifier:[\\w-]+",
 
-    "(?i)(Triggered|Recovered|Re-Triggered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*Parser\\s+is\\s+down\\s+on\\s+source:[\\w-]+",
-
-    "(?i)(Triggered|Recovered|Re-Triggered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*prod\\s+parser\\s+is\\s+down",
-
-
-    "(?i)(Triggered|Recovered|Re-Triggered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*Load\\s+balancer\\s+latency\\s+increased",
-
-    "(?i)(Triggered|Recovered|Re-Triggered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*Load\\s+balancer\\s+TLS\\s+negotiation\\s+error",
-
-    "(?i)(Triggered|Recovered|Re-Triggered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*Load\\s+balancer\\s+5xx\\s+Errors",
-
-    "(?i)(Triggered|Recovered|Re-Triggered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*Prod\\s+LB\\s+Request\\s+Count\\s+Drop",
-
-
-    "(?i)(Triggered|Recovered|Re-Triggered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*[A-Za-z0-9_-]+\\s+increased\\s+lag\\s+on\\s+Kafka",
-
-    "(?i)(Triggered|Recovered|Re-Triggered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*Base\\s+prod\\s+increased\\s+lag",
-
-
-    "(?i)(Triggered|Recovered|Re-Triggered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*MSK\\s+CPU\\s+system\\s+usage\\s+high\\s+on\\s+broker_id:\\d+",
-
-
-    "(?i)(Triggered|Recovered|Re-Triggered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*pods\\s+CPU\\s+utilization\\s+in\\s+K8s\\s+deployment\\s+on\\s+kube_deployment:[\\w-]+",
-
-    "(?i)(Triggered|Recovered|Re-Triggered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*pod\\s+restart\\s+for\\s+k8s\\s+deployments\\s+on\\s+kube_deployment:[\\w-]+",
-
-
-    "(?i)(Triggered|Recovered|Re-Triggered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*CPU\\s+Load\\s+is\\s+Very\\s+High\\s+on.*",
-
-    "(?i)(Triggered|Recovered|Re-Triggered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*DB\\s+Load\\s+is\\s+Very\\s+High\\s+on.*",
-
-
-    "(?i)(Triggered|Recovered|Re-Triggered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*\\[AWS\\]\\s+RDS\\s+CPU\\s+utilization\\s+is\\s+high\\s+on\\s+dbinstanceidentifier:[\\w-]+",
-
-    "(?i)(Triggered|Recovered|Re-Triggered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*\\[AWS\\]\\s+RDS\\s+Storage\\s+utilization\\s+is\\s+high\\s+on\\s+dbinstanceidentifier:[\\w-]+,engine:(?:mysql|MySQL)",
-
-    "(?i)(Triggered|Recovered|Re-Triggered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*\\[AWS\\]\\s+RDS\\s+Freeable\\s+Memory\\s+Alert\\s+on\\s+dbinstanceidentifier:[\\w-]+",
-
-    "(?i)(Triggered|Recovered|Re-Triggered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*\\[AWS\\]\\s+RDS\\s+Anomaly\\s+in\\s+database\\s+connections\\s+on\\s+dbinstanceidentifier:[\\w-]+"
-  
+    "(?i)prod\\s*-\\s*full\\s*node\\s*down\\s*-\\s*prod",
+    "(?i)issue[\\s\\S]+"
   ],
+
   "exclude_patterns": [
     "(?:80|50)% Disk Space used on Volume\\s*/?\\s*Server\\s*:\\s*[\\w-]+",
     "(?:80|50)% RAM used on \\s*[\\w-]+",
     "(?:80|50)% CPU utilization on \\s*[\\w-]+"
   ]
 }
+
