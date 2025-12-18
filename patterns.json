@@ -8,7 +8,6 @@
 
     "(?i)(\\b\\w+\\s+increased\\s+lag\\s+on\\s+Kafka\\b)",
 
-    /* ===================== CORE / PLATFORM ===================== */
 
     "(?i)(Triggered|Recovered|Re-Triggered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*Signer\\s+error",
 
@@ -16,7 +15,6 @@
 
     "(?i)(Triggered|Recovered|Re-Triggered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*Consolidation\\s+API\\s+Failure\\s*,?\\s*ENV\\s+PROD",
 
-    /* ===================== PARSER ===================== */
 
     "(?i)(Triggered|Recovered|Re-Triggered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*[A-Za-z0-9_-]+\\s+prod\\s+parser\\s+is\\s+down",
 
@@ -24,7 +22,6 @@
 
     "(?i)(Triggered|Recovered|Re-Triggered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*prod\\s+parser\\s+is\\s+down",
 
-    /* ===================== LOAD BALANCER ===================== */
 
     "(?i)(Triggered|Recovered|Re-Triggered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*Load\\s+balancer\\s+latency\\s+increased",
 
@@ -34,29 +31,24 @@
 
     "(?i)(Triggered|Recovered|Re-Triggered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*Prod\\s+LB\\s+Request\\s+Count\\s+Drop",
 
-    /* ===================== KAFKA LAG (CRITICAL FIX) ===================== */
 
     "(?i)(Triggered|Recovered|Re-Triggered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*[A-Za-z0-9_-]+\\s+increased\\s+lag\\s+on\\s+Kafka",
 
     "(?i)(Triggered|Recovered|Re-Triggered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*Base\\s+prod\\s+increased\\s+lag",
 
-    /* ===================== MSK ===================== */
 
     "(?i)(Triggered|Recovered|Re-Triggered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*MSK\\s+CPU\\s+system\\s+usage\\s+high\\s+on\\s+broker_id:\\d+",
 
-    /* ===================== KUBERNETES ===================== */
 
     "(?i)(Triggered|Recovered|Re-Triggered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*pods\\s+CPU\\s+utilization\\s+in\\s+K8s\\s+deployment\\s+on\\s+kube_deployment:[\\w-]+",
 
     "(?i)(Triggered|Recovered|Re-Triggered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*pod\\s+restart\\s+for\\s+k8s\\s+deployments\\s+on\\s+kube_deployment:[\\w-]+",
 
-    /* ===================== GENERIC CPU / DB LOAD ===================== */
 
     "(?i)(Triggered|Recovered|Re-Triggered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*CPU\\s+Load\\s+is\\s+Very\\s+High\\s+on.*",
 
     "(?i)(Triggered|Recovered|Re-Triggered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*DB\\s+Load\\s+is\\s+Very\\s+High\\s+on.*",
 
-    /* ===================== AWS RDS ===================== */
 
     "(?i)(Triggered|Recovered|Re-Triggered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*\\[AWS\\]\\s+RDS\\s+CPU\\s+utilization\\s+is\\s+high\\s+on\\s+dbinstanceidentifier:[\\w-]+",
 
