@@ -115,30 +115,32 @@ def get_channel_name(channel_id):
 
 def send_to_target(original_message, channel_id, message_ts, state):
     channel_name = get_channel_name(channel_id)
+
     permalink = app.client.chat_getPermalink(
-        channel=channel_id, message_ts=message_ts
+        channel=channel_id,
+        message_ts=message_ts
     )["permalink"]
 
-    final_message = (
-        f"*{original_message}*\n"
-        f"<{permalink}|View message>\n"
+    # Color mapping exactly like Slack alerts
+    color_map = {
+        "Triggered": "#E01E5A",      # Red
+        "Re-Triggered": "#E01E5A",   # Red
+        "Warn": "#ECB22E",           # Yellow
+        "Recovered": "#2EB67D"       # Green
+    }
+
+    text = (
+        f"{original_message}\n"
+        f"Link: <{permalink}|View message>\n"
         f"Channel: <#{channel_id}|{channel_name}>"
     )
-
-    # Color mapping
-    color_map = {
-        "Triggered": "#ECB22E",     # Yellow
-        "Re-Triggered": "#ECB22E",  # Yellow
-        "Warn": "#ECB22E",          # Yellow
-        "Recovered": "#2EB67D"      # Green
-    }
 
     app.client.chat_postMessage(
         channel=target_channel_id,
         attachments=[
             {
                 "color": color_map.get(state, "#ECB22E"),
-                "text": final_message,
+                "text": text,
                 "mrkdwn_in": ["text"]
             }
         ],
