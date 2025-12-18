@@ -3,7 +3,7 @@ import sys
 import re
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
@@ -26,15 +26,15 @@ bot_token = os.environ.get("BOT_TOKEN")
 target_channel_id = os.environ.get("TARGET_CHANNEL_ID")
 channel_ids = os.environ.get("CHANNEL_IDS", "").split(",")
 
+# ---------------- EMOJIS ---------------- #
 
 EMOJI_MAP = {
-    "Triggered": "🚨",
-    "Re-Triggered": "🚨",
-    "Warn": "⚠️",
+    "Triggered": "🚨",       # :siren:
+    "Re-Triggered": "🚨",    # :siren:
     "Recovered": "✅"
 }
 
-# ---- REQUIRED WARNING SECTION (AS REQUESTED) ---- #
+# ---------------- REQUIRED WARNINGS ---------------- #
 
 if not app_token:
     logger.warning("APP_TOKEN not found in the vault.")
@@ -55,16 +55,25 @@ if not all([app_token, bot_token, target_channel_id]) or channel_ids == [""]:
 # ---------------- SLACK APP ---------------- #
 
 app = App(token=bot_token)
+
+# ---------------- ALERT STATE CACHE ---------------- #
+# {
+#   alert_name: {
+#       "triggered_sent": bool,
+#       "retriggered_sent": bool
+#   }
+# }
+
 recent_messages_cache = {}
 
-# ---------------- CANONICAL ALERT REGEX ---------------- #
-# Matches:
+# ---------------- ALERT REGEX ---------------- #
+# Handles:
 # Triggered: [TEST] Something
-# Recovered: [CRITICAL] Something
-# Warn: Something
+# Re-Triggered: Something
+# Recovered: Something
 
 ALERT_REGEX = re.compile(
-    r'(?i)(Triggered|Recovered|Re-Triggered|Warn):\s*(?:\[[^\]]+\]\s*)*(.+)'
+    r'(?i)\b(Triggered|Re-Triggered|Recovered|Warn):\s*(?:\[[^\]]+\]\s*)*(.+)'
 )
 
 # ---------------- PATTERN LOADING ---------------- #
@@ -87,38 +96,64 @@ include_patterns, exclude_patterns = load_filter_patterns(
 
 def extract_alert(text):
     """
-    Extracts the FIRST alert line from a multiline Datadog message.
-    Returns (state, alert_text)
+    Extract alert state and alert name.
     """
     match = ALERT_REGEX.search(text)
     if not match:
         return None, None
 
-    alert_text = match.group(2).strip()
-    alert_text = alert_text.split("\n")[0].strip()  # 🔥 important
-
-    return match.group(1), alert_text
-
+    alert_name = match.group(2).strip()
+    alert_name = alert_name.split("\n")[0].strip()
+    return match.group(1), alert_name
 
 
-def cache_key(state, alert_text):
-    return f"{state}:{alert_text}"
+def should_forward_alert(alert_name, state):
+    """
+    FINAL lifecycle rules:
 
+    - Triggered → forward ONCE
+    - Re-Triggered → forward ONCE
+    - Recovered → always forward (resets state)
+    - Everything else → suppress
+    """
 
-def is_recent(key, minutes=60):
-    entry = recent_messages_cache.get(key)
+    entry = recent_messages_cache.get(alert_name)
+
+    # Initialize state
     if not entry:
-        return False
-    return datetime.now() - entry["time"] <= timedelta(minutes=minutes)
+        recent_messages_cache[alert_name] = {
+            "triggered_sent": False,
+            "retriggered_sent": False
+        }
+        entry = recent_messages_cache[alert_name]
 
+    # -------- Triggered -------- #
+    if state == "Triggered":
+        if entry["triggered_sent"]:
+            return False
+        entry["triggered_sent"] = True
+        return True
 
-def update_cache(key):
-    recent_messages_cache[key] = {"time": datetime.now()}
+    # -------- Re-Triggered -------- #
+    if state == "Re-Triggered":
+        if entry["retriggered_sent"]:
+            return False
+        entry["retriggered_sent"] = True
+        return True
+
+    # -------- Recovered -------- #
+    if state == "Recovered":
+        recent_messages_cache.pop(alert_name, None)
+        return True
+
+    # -------- Warn or anything else -------- #
+    return False
 
 
 def get_channel_name(channel_id):
     resp = app.client.conversations_info(channel=channel_id)
     return resp["channel"]["name"]
+
 
 def send_to_target(original_message, channel_id, message_ts, state):
     channel_name = get_channel_name(channel_id)
@@ -128,12 +163,10 @@ def send_to_target(original_message, channel_id, message_ts, state):
         message_ts=message_ts
     )["permalink"]
 
-    emoji = EMOJI_MAP.get(state, "⚠️")
-
-    highlighted_message = f"{emoji} *{original_message}*"
+    emoji = EMOJI_MAP.get(state, "ℹ️")
 
     final_message = (
-        f"{highlighted_message}\n"
+        f"{emoji} *{original_message}*\n"
         f"Link: <{permalink}|View message>\n"
         f"Channel: <#{channel_id}|{channel_name}>"
     )
@@ -141,7 +174,6 @@ def send_to_target(original_message, channel_id, message_ts, state):
     color_map = {
         "Triggered": "#E01E5A",
         "Re-Triggered": "#E01E5A",
-        "Warn": "#ECB22E",
         "Recovered": "#2EB67D"
     }
 
@@ -149,7 +181,7 @@ def send_to_target(original_message, channel_id, message_ts, state):
         channel=target_channel_id,
         attachments=[
             {
-                "color": color_map.get(state, "#ECB22E"),
+                "color": color_map.get(state, "#CCCCCC"),
                 "text": final_message,
                 "mrkdwn_in": ["text"]
             }
@@ -157,31 +189,21 @@ def send_to_target(original_message, channel_id, message_ts, state):
         unfurl_links=False
     )
 
-
-
 # ---------------- CORE HANDLER ---------------- #
 
 def handle_alert(original_message, channel_id, message_ts):
-    state, alert_text = extract_alert(original_message)
+    state, alert_name = extract_alert(original_message)
 
     if not state:
         logger.info("Not a valid alert format, skipping")
         return
 
-    key = cache_key(state, alert_text)
-
-    # Deduplication rules
-    if state in ["Triggered", "Re-Triggered", "Warn"]:
-        if is_recent(key):
-            logger.info(f"Duplicate suppressed: {key}")
-            return
-        update_cache(key)
-
-    elif state == "Recovered":
-        update_cache(key)
+    if not should_forward_alert(alert_name, state):
+        logger.info(f"Suppressed: {state} | {alert_name}")
+        return
 
     send_to_target(original_message, channel_id, message_ts, state)
-    logger.info(f"Forwarded alert: {key}")
+    logger.info(f"Forwarded: {state} | {alert_name}")
 
 # ---------------- SLACK MESSAGE HANDLERS ---------------- #
 
@@ -233,5 +255,5 @@ def button_click(ack, body, client):
 # ---------------- MAIN ---------------- #
 
 if __name__ == "__main__":
-    logger.info("Starting Slackbot (final simplified version)")
+    logger.info("Starting Slackbot (final lifecycle-controlled version)")
     SocketModeHandler(app, app_token).start()
