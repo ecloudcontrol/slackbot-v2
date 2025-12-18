@@ -56,7 +56,7 @@ recent_messages_cache = {}
 # Warn: Something
 
 ALERT_REGEX = re.compile(
-    r'(?i)^(Triggered|Recovered|Re-Triggered|Warn):\s*(?:\[[A-Z]+\]\s*)*(.+)$'
+    r'(?i)(Triggered|Recovered|Re-Triggered|Warn):\s*(?:\[[^\]]+\]\s*)*(.+)'
 )
 
 # ---------------- PATTERN LOADING ---------------- #
@@ -79,12 +79,18 @@ include_patterns, exclude_patterns = load_filter_patterns(
 
 def extract_alert(text):
     """
+    Extracts the FIRST alert line from a multiline Datadog message.
     Returns (state, alert_text)
     """
     match = ALERT_REGEX.search(text)
     if not match:
         return None, None
-    return match.group(1), match.group(2).strip()
+
+    alert_text = match.group(2).strip()
+    alert_text = alert_text.split("\n")[0].strip()  # 🔥 important
+
+    return match.group(1), alert_text
+
 
 
 def cache_key(state, alert_text):
