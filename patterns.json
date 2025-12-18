@@ -28,7 +28,8 @@
 
     "(?i)(Triggered|Recovered|Re-Triggered):\\s*(?:\\[[A-Z]+\\]\\s*)*Load\\s+balancer\\s+TLS\\s+negotiation\\s+error",
 
-    "(?i)(Triggered|Recovered|Re-Triggered):?\\s*(?:\\[[A-Z]+\\]\\s*)*[A-Z0-9]+\\s+increased\\s+lag\\s+on\\s+Kafka"
+    "(?i)(Triggered|Recovered|Re-Triggered|Warn):\\s*(?:\\[[A-Z]+\\]\\s*)*[\\w-]+\\s+increased\\s+lag\\s+on\\s+Kafka"
+
   ],
   "exclude_patterns": [
     "(?:80|50)% Disk Space used on Volume\\s*/?\\s*Server\\s*:\\s*[\\w-]+",
