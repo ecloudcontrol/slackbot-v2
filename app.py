@@ -26,6 +26,14 @@ bot_token = os.environ.get("BOT_TOKEN")
 target_channel_id = os.environ.get("TARGET_CHANNEL_ID")
 channel_ids = os.environ.get("CHANNEL_IDS", "").split(",")
 
+
+EMOJI_MAP = {
+    "Triggered": "🚨",
+    "Re-Triggered": "🚨",
+    "Warn": "⚠️",
+    "Recovered": "✅"
+}
+
 # ---- REQUIRED WARNING SECTION (AS REQUESTED) ---- #
 
 if not app_token:
@@ -112,7 +120,6 @@ def get_channel_name(channel_id):
     resp = app.client.conversations_info(channel=channel_id)
     return resp["channel"]["name"]
 
-
 def send_to_target(original_message, channel_id, message_ts, state):
     channel_name = get_channel_name(channel_id)
 
@@ -121,31 +128,35 @@ def send_to_target(original_message, channel_id, message_ts, state):
         message_ts=message_ts
     )["permalink"]
 
-    # Color mapping exactly like Slack alerts
-    color_map = {
-        "Triggered": "#E01E5A",      # Red
-        "Re-Triggered": "#E01E5A",   # Red
-        "Warn": "#ECB22E",           # Yellow
-        "Recovered": "#2EB67D"       # Green
-    }
+    emoji = EMOJI_MAP.get(state, "⚠️")
 
-    text = (
-        f"{original_message}\n"
+    highlighted_message = f"{emoji} *{original_message}*"
+
+    final_message = (
+        f"{highlighted_message}\n"
         f"Link: <{permalink}|View message>\n"
         f"Channel: <#{channel_id}|{channel_name}>"
     )
+
+    color_map = {
+        "Triggered": "#E01E5A",
+        "Re-Triggered": "#E01E5A",
+        "Warn": "#ECB22E",
+        "Recovered": "#2EB67D"
+    }
 
     app.client.chat_postMessage(
         channel=target_channel_id,
         attachments=[
             {
                 "color": color_map.get(state, "#ECB22E"),
-                "text": text,
+                "text": final_message,
                 "mrkdwn_in": ["text"]
             }
         ],
         unfurl_links=False
     )
+
 
 
 # ---------------- CORE HANDLER ---------------- #
