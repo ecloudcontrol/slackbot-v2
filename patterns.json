@@ -23,6 +23,8 @@
     "(?i)pods\\s+cpu\\s+utilization\\s+in\\s+k8s\\s+deployment\\s+on\\s+kube_deployment:[\\w-]+",
     "(?i)pod\\s+restart\\s+for\\s+k8s\\s+deployments\\s+on\\s+kube_deployment:[\\w-]+",
 
+    (?i)memory\s+utilisation\s+of\s+k8s\s+deployments\s+on\s+kube_deployment:[\w-]+
+
     "(?i)cpu\\s+load\\s+is\\s+very\\s+high\\s+on.*",
     "(?i)db\\s+load\\s+is\\s+very\\s+high\\s+on.*",
 
@@ -30,6 +32,7 @@
     "(?i)\\[aws\\]\\s+rds\\s+storage\\s+utilization\\s+is\\s+high\\s+on\\s+dbinstanceidentifier:[\\w-]+,engine:(mysql|mysql)",
     "(?i)\\[aws\\]\\s+rds\\s+freeable\\s+memory\\s+alert\\s+on\\s+dbinstanceidentifier:[\\w-]+",
     "(?i)\\[aws\\]\\s+rds\\s+anomaly\\s+in\\s+database\\s+connections\\s+on\\s+dbinstanceidentifier:[\\w-]+",
+    
 
     "(?i)prod\\s*-\\s*full\\s*node\\s*down\\s*-\\s*prod",
     "(?i)issue[\\s\\S]+"
