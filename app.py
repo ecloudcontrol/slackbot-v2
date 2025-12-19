@@ -49,7 +49,7 @@ if not all([app_token, bot_token, target_channel_id]) or channel_ids == [""]:
 app = App(token=bot_token)
 
 # ---------------- CACHE ---------------- #
-# alert_name -> merged state
+# alert_name -> state + merged channels
 
 recent_messages_cache = {}
 
@@ -65,6 +65,7 @@ def load_filter_patterns(path):
     try:
         with open(path) as f:
             data = json.load(f)
+            logger.info("patterns.json loaded successfully")
             return data.get("include_patterns", []), data.get("exclude_patterns", [])
     except Exception as e:
         logger.error(f"Failed to load filter patterns: {e}")
@@ -77,98 +78,91 @@ include_patterns, exclude_patterns = load_filter_patterns(
 # ---------------- HELPERS ---------------- #
 
 def extract_alert(text):
+    """
+    Extract (state, alert_name) from Slack / Datadog message
+    """
     match = ALERT_REGEX.search(text)
     if not match:
         return None, None
-    return match.group(1), match.group(2).split("\n")[0].strip()
+
+    alert_name = match.group(2).split("\n")[0].strip()
+    return match.group(1), alert_name
 
 
-def format_sources(channels):
-    return ", ".join(f"<#{cid}>" for cid in sorted(channels))
-
-
-def get_channel_name(channel_id):
-    return app.client.conversations_info(channel=channel_id)["channel"]["name"]
-
-
-# ---------------- CORE MERGE LOGIC ---------------- #
-
-def should_forward_or_update(alert_name, state, channel_id):
+def should_forward_alert(alert_name, state, channel_id):
     """
-    Returns:
-      ("send", None)      -> send new Slack message
-      ("update", None)    -> update existing Slack message
-      ("ignore", None)    -> do nothing
+    Enforces:
+    - Only FIRST Triggered / Re-Triggered / Warn / Recovered forwarded
+    - Merges alerts from multiple channels
     """
 
     entry = recent_messages_cache.get(alert_name)
 
     if not entry:
-        recent_messages_cache[alert_name] = {
+        entry = {
             "triggered": False,
             "retriggered": False,
             "warn": False,
             "recovered": False,
             "channels": set(),
-            "slack_ts": None,
-            "last_state": None
+            "first_seen": datetime.now()
         }
-        entry = recent_messages_cache[alert_name]
+        recent_messages_cache[alert_name] = entry
 
     entry["channels"].add(channel_id)
 
-    # If message already sent → update it
-    if entry["slack_ts"]:
-        return "update", None
-
-    # First occurrence rules
-    if state == "Triggered" and not entry["triggered"]:
+    if state == "Triggered":
+        if entry["triggered"]:
+            return False
         entry["triggered"] = True
-        entry["last_state"] = state
-        return "send", None
+        return True
 
-    if state == "Re-Triggered" and not entry["retriggered"]:
+    if state == "Re-Triggered":
+        if entry["retriggered"]:
+            return False
         entry["retriggered"] = True
-        entry["last_state"] = state
-        return "send", None
+        return True
 
-    if state == "Warn" and not entry["warn"]:
+    if state == "Warn":
+        if entry["warn"]:
+            return False
         entry["warn"] = True
-        entry["last_state"] = state
-        return "send", None
+        return True
 
-    if state == "Recovered" and not entry["recovered"]:
+    if state == "Recovered":
+        if entry["recovered"]:
+            return False
         entry["recovered"] = True
-        entry["last_state"] = state
-        return "send", None
+        return True
 
-    return "ignore", None
-
-
-# ---------------- SLACK SEND / UPDATE ---------------- #
-
-def build_message(original_message, alert_name, state):
-    entry = recent_messages_cache[alert_name]
-    sources = format_sources(entry["channels"])
-
-    alert_title = f"*{original_message}*"
-
-    return (
-        f"{alert_title}\n"
-        f"Sources: {sources}"
-    )
+    return False
 
 
-def send_new_message(original_message, channel_id, message_ts, state, alert_name):
+def format_sources(alert_name):
+    channels = recent_messages_cache.get(alert_name, {}).get("channels", [])
+    return ", ".join(f"<#{cid}>" for cid in sorted(channels))
+
+
+def get_channel_name(channel_id):
+    resp = app.client.conversations_info(channel=channel_id)
+    return resp["channel"]["name"]
+
+
+def send_to_target(original_message, channel_id, message_ts, state, alert_name):
+    channel_name = get_channel_name(channel_id)
+
     permalink = app.client.chat_getPermalink(
         channel=channel_id,
         message_ts=message_ts
     )["permalink"]
 
-    message_text = build_message(
-        f"<{permalink}|{original_message}>",
-        alert_name,
-        state
+    sources = format_sources(alert_name)
+
+    final_message = (
+        f"*{original_message}*\n"
+        f"Sources: {sources}\n"
+        f"Link: <{permalink}|View message>\n"
+        f"Channel: <#{channel_id}|{channel_name}>"
     )
 
     color_map = {
@@ -178,73 +172,38 @@ def send_new_message(original_message, channel_id, message_ts, state, alert_name
         "Recovered": "#2EB67D"
     }
 
-    resp = app.client.chat_postMessage(
+    app.client.chat_postMessage(
         channel=target_channel_id,
         attachments=[
             {
                 "color": color_map.get(state, "#CCCCCC"),
-                "text": message_text,
+                "text": final_message,
                 "mrkdwn_in": ["text"]
             }
         ],
         unfurl_links=False
     )
 
-    recent_messages_cache[alert_name]["slack_ts"] = resp["ts"]
-
-
-def update_existing_message(alert_name, state):
-    entry = recent_messages_cache[alert_name]
-
-    message_text = build_message(
-        entry["last_state"] + ": " + alert_name,
-        alert_name,
-        state
-    )
-
-    color_map = {
-        "Triggered": "#E01E5A",
-        "Re-Triggered": "#E01E5A",
-        "Warn": "#ECB22E",
-        "Recovered": "#2EB67D"
-    }
-
-    app.client.chat_update(
-        channel=target_channel_id,
-        ts=entry["slack_ts"],
-        attachments=[
-            {
-                "color": color_map.get(entry["last_state"], "#CCCCCC"),
-                "text": message_text,
-                "mrkdwn_in": ["text"]
-            }
-        ]
-    )
-
-
-# ---------------- MAIN HANDLER ---------------- #
+# ---------------- CORE HANDLER ---------------- #
 
 def handle_alert(original_message, channel_id, message_ts):
     state, alert_name = extract_alert(original_message)
+
     if not state:
         return
 
-    action, _ = should_forward_or_update(alert_name, state, channel_id)
+    if not should_forward_alert(alert_name, state, channel_id):
+        logger.info(f"Suppressed (merged): {state} | {alert_name}")
+        return
 
-    if action == "send":
-        send_new_message(original_message, channel_id, message_ts, state, alert_name)
-        logger.info(f"Sent new alert: {alert_name}")
+    send_to_target(original_message, channel_id, message_ts, state, alert_name)
+    logger.info(f"Forwarded: {state} | {alert_name}")
 
-    elif action == "update":
-        update_existing_message(alert_name, state)
-        logger.info(f"Updated alert sources: {alert_name}")
-
-    # Reset lifecycle after merged recovery
+    # 🔁 Reset lifecycle after merged recovery
     if state == "Recovered":
         recent_messages_cache.pop(alert_name, None)
 
-
-# ---------------- SLACK HANDLERS ---------------- #
+# ---------------- MESSAGE HANDLERS ---------------- #
 
 @app.message(re.compile("|".join(include_patterns)))
 def handle_plain_messages(message, client):
@@ -252,6 +211,7 @@ def handle_plain_messages(message, client):
         return
 
     text = message["text"]
+
     if any(re.search(p, text) for p in exclude_patterns):
         return
 
@@ -276,9 +236,19 @@ def handle_attachment_messages(body, logger, client):
         if any(re.search(p, fallback) for p in include_patterns):
             handle_alert(fallback, event["channel"], event["ts"])
 
+# ---------------- BUTTON HANDLER ---------------- #
+
+@app.action("button_click")
+def button_click(ack, body, client):
+    ack()
+    client.reactions_add(
+        channel=body["channel"]["id"],
+        name="white_check_mark",
+        timestamp=body["message"]["ts"]
+    )
 
 # ---------------- MAIN ---------------- #
 
 if __name__ == "__main__":
-    logger.info("Starting Slackbot (merged + update-in-place version)")
+    logger.info("Starting Slackbot (final merged-alert version)")
     SocketModeHandler(app, app_token).start()
