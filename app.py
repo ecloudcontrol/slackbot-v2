@@ -24,23 +24,9 @@ logger.setLevel(logging.INFO)
 app_token = os.environ.get("APP_TOKEN")
 bot_token = os.environ.get("BOT_TOKEN")
 target_channel_id = os.environ.get("TARGET_CHANNEL_ID")
-channel_ids = os.environ.get("CHANNEL_IDS", "").split(",")
+channel_ids = [c.strip() for c in os.environ.get("CHANNEL_IDS", "").split(",") if c.strip()]
 
-# ---- REQUIRED WARNING SECTION ---- #
-
-if not app_token:
-    logger.warning("APP_TOKEN not found in the vault.")
-
-if not bot_token:
-    logger.warning("BOT_TOKEN not found in the vault.")
-
-if not target_channel_id:
-    logger.warning("TARGET_CHANNEL_ID not found in env.")
-
-if not channel_ids or channel_ids == [""]:
-    logger.warning("CHANNEL_IDS not found in env.")
-
-if not all([app_token, bot_token, target_channel_id]) or channel_ids == [""]:
+if not all([app_token, bot_token, target_channel_id, channel_ids]):
     logger.error("Missing required environment variables. Aborting...")
     sys.exit(1)
 
@@ -49,7 +35,6 @@ if not all([app_token, bot_token, target_channel_id]) or channel_ids == [""]:
 app = App(token=bot_token)
 
 # ---------------- CACHE ---------------- #
-# alert_name -> state + merged channels
 
 recent_messages_cache = {}
 
@@ -78,24 +63,14 @@ include_patterns, exclude_patterns = load_filter_patterns(
 # ---------------- HELPERS ---------------- #
 
 def extract_alert(text):
-    """
-    Extract (state, alert_name) from Slack / Datadog message
-    """
     match = ALERT_REGEX.search(text)
     if not match:
         return None, None
-
     alert_name = match.group(2).split("\n")[0].strip()
     return match.group(1), alert_name
 
 
 def should_forward_alert(alert_name, state, channel_id):
-    """
-    Enforces:
-    - Only FIRST Triggered / Re-Triggered / Warn / Recovered forwarded
-    - Merges alerts from multiple channels
-    """
-
     entry = recent_messages_cache.get(alert_name)
 
     if not entry:
@@ -111,28 +86,19 @@ def should_forward_alert(alert_name, state, channel_id):
 
     entry["channels"].add(channel_id)
 
-    if state == "Triggered":
-        if entry["triggered"]:
-            return False
-        entry["triggered"] = True
-        return True
+    key_map = {
+        "Triggered": "triggered",
+        "Re-Triggered": "retriggered",
+        "Warn": "warn",
+        "Recovered": "recovered"
+    }
 
-    if state == "Re-Triggered":
-        if entry["retriggered"]:
-            return False
-        entry["retriggered"] = True
-        return True
+    key = key_map.get(state)
+    if key and entry[key]:
+        return False
 
-    if state == "Warn":
-        if entry["warn"]:
-            return False
-        entry["warn"] = True
-        return True
-
-    if state == "Recovered":
-        if entry["recovered"]:
-            return False
-        entry["recovered"] = True
+    if key:
+        entry[key] = True
         return True
 
     return False
@@ -144,8 +110,11 @@ def format_sources(alert_name):
 
 
 def get_channel_name(channel_id):
-    resp = app.client.conversations_info(channel=channel_id)
-    return resp["channel"]["name"]
+    try:
+        resp = app.client.conversations_info(channel=channel_id)
+        return resp["channel"]["name"]
+    except Exception:
+        return channel_id
 
 
 def send_to_target(original_message, channel_id, message_ts, state, alert_name):
@@ -156,11 +125,9 @@ def send_to_target(original_message, channel_id, message_ts, state, alert_name):
         message_ts=message_ts
     )["permalink"]
 
-    sources = format_sources(alert_name)
-
     final_message = (
         f"*{original_message}*\n"
-        f"Sources: {sources}\n"
+        f"Sources: {format_sources(alert_name)}\n"
         f"Link: <{permalink}|View message>\n"
         f"Channel: <#{channel_id}|{channel_name}>"
     )
@@ -174,21 +141,18 @@ def send_to_target(original_message, channel_id, message_ts, state, alert_name):
 
     app.client.chat_postMessage(
         channel=target_channel_id,
-        attachments=[
-            {
-                "color": color_map.get(state, "#CCCCCC"),
-                "text": final_message,
-                "mrkdwn_in": ["text"]
-            }
-        ],
+        attachments=[{
+            "color": color_map.get(state, "#CCCCCC"),
+            "text": final_message,
+            "mrkdwn_in": ["text"]
+        }],
         unfurl_links=False
     )
 
-# ---------------- CORE HANDLER ---------------- #
+# ---------------- CORE ---------------- #
 
-def handle_alert(original_message, channel_id, message_ts):
-    state, alert_name = extract_alert(original_message)
-
+def handle_alert(text, channel_id, ts):
+    state, alert_name = extract_alert(text)
     if not state:
         return
 
@@ -196,10 +160,9 @@ def handle_alert(original_message, channel_id, message_ts):
         logger.info(f"Suppressed (merged): {state} | {alert_name}")
         return
 
-    send_to_target(original_message, channel_id, message_ts, state, alert_name)
+    send_to_target(text, channel_id, ts, state, alert_name)
     logger.info(f"Forwarded: {state} | {alert_name}")
 
-    # 🔁 Reset lifecycle after merged recovery
     if state == "Recovered":
         recent_messages_cache.pop(alert_name, None)
 
@@ -207,24 +170,39 @@ def handle_alert(original_message, channel_id, message_ts):
 
 @app.message(re.compile("|".join(include_patterns)))
 def handle_plain_messages(message, client):
-    if message["channel"] not in channel_ids:
+    channel_id = message.get("channel")
+
+    if channel_id not in channel_ids:
+        logger.info(f"Ignoring message from channel {channel_id}")
         return
 
-    text = message["text"]
-
+    text = message.get("text", "")
     if any(re.search(p, text) for p in exclude_patterns):
         return
 
-    handle_alert(text, message["channel"], message["ts"])
+    handle_alert(text, channel_id, message["ts"])
 
 
 @app.event("message")
-def handle_attachment_messages(body, logger, client):
-    event = body["event"]
+def handle_message_events(body, logger, client):
+    event = body.get("event", {})
+    channel_id = event.get("channel")
 
-    if event.get("channel") not in channel_ids:
+    if channel_id not in channel_ids:
+        logger.info(f"Ignoring event from channel {channel_id}")
         return
 
+    text = event.get("text", "")
+    subtype = event.get("subtype")
+
+    # Handle Datadog bot messages (text-only)
+    if subtype == "bot_message" and text:
+        if any(re.search(p, text) for p in exclude_patterns):
+            return
+        if any(re.search(p, text) for p in include_patterns):
+            handle_alert(text, channel_id, event["ts"])
+
+    # Handle attachments (snapshots / graphs)
     for attachment in event.get("attachments", []):
         fallback = attachment.get("fallback", "")
         if not fallback:
@@ -232,20 +210,8 @@ def handle_attachment_messages(body, logger, client):
 
         if any(re.search(p, fallback) for p in exclude_patterns):
             continue
-
         if any(re.search(p, fallback) for p in include_patterns):
-            handle_alert(fallback, event["channel"], event["ts"])
-
-# ---------------- BUTTON HANDLER ---------------- #
-
-@app.action("button_click")
-def button_click(ack, body, client):
-    ack()
-    client.reactions_add(
-        channel=body["channel"]["id"],
-        name="white_check_mark",
-        timestamp=body["message"]["ts"]
-    )
+            handle_alert(fallback, channel_id, event["ts"])
 
 # ---------------- MAIN ---------------- #
 
