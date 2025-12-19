@@ -3,7 +3,7 @@ import sys
 import re
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
@@ -24,9 +24,23 @@ logger.setLevel(logging.INFO)
 app_token = os.environ.get("APP_TOKEN")
 bot_token = os.environ.get("BOT_TOKEN")
 target_channel_id = os.environ.get("TARGET_CHANNEL_ID")
-channel_ids = [c.strip() for c in os.environ.get("CHANNEL_IDS", "").split(",") if c.strip()]
+channel_ids = os.environ.get("CHANNEL_IDS", "").split(",")
 
-if not all([app_token, bot_token, target_channel_id, channel_ids]):
+# ---- REQUIRED WARNING SECTION ---- #
+
+if not app_token:
+    logger.warning("APP_TOKEN not found in the vault.")
+
+if not bot_token:
+    logger.warning("BOT_TOKEN not found in the vault.")
+
+if not target_channel_id:
+    logger.warning("TARGET_CHANNEL_ID not found in env.")
+
+if not channel_ids or channel_ids == [""]:
+    logger.warning("CHANNEL_IDS not found in env.")
+
+if not all([app_token, bot_token, target_channel_id]) or channel_ids == [""]:
     logger.error("Missing required environment variables. Aborting...")
     sys.exit(1)
 
@@ -35,10 +49,17 @@ if not all([app_token, bot_token, target_channel_id, channel_ids]):
 app = App(token=bot_token)
 
 # ---------------- CACHE ---------------- #
+# alert_name -> state + merged channels
 
 recent_messages_cache = {}
 
-# ---------------- PATTERNS ---------------- #
+# ---------------- ALERT REGEX ---------------- #
+
+ALERT_REGEX = re.compile(
+    r'(?i)(Triggered|Recovered|Re-Triggered|Warn):\s*(?:\[[^\]]+\]\s*)*(.+)'
+)
+
+# ---------------- PATTERN LOADING ---------------- #
 
 def load_filter_patterns(path):
     try:
@@ -54,157 +75,180 @@ include_patterns, exclude_patterns = load_filter_patterns(
     "/appz/scripts/webapps/patterns.json"
 )
 
-# ---------------- LEGACY LOGIC (UNCHANGED) ---------------- #
+# ---------------- HELPERS ---------------- #
 
-def extract_triggered_message(original_message, pattern):
-    match1 = re.search(pattern, original_message)
-    match2 = re.search(r'(Name:(.+\n.+)())', original_message)
+def extract_alert(text):
+    """
+    Extract (state, alert_name) from Slack / Datadog message
+    """
+    match = ALERT_REGEX.search(text)
+    if not match:
+        return None, None
 
-    if match1:
-        return match1.group(2), match1.group(3)
-    elif match2:
-        return match2.group(2), 'Issue'
-    return None, None
+    alert_name = match.group(2).split("\n")[0].strip()
+    return match.group(1), alert_name
 
 
-def is_triggered_message_cached(triggered_message, original_message):
-    alert, key = triggered_message
-    if not alert or not key:
-        return False
+def should_forward_alert(alert_name, state, channel_id):
+    """
+    Enforces:
+    - Only FIRST Triggered / Re-Triggered / Warn / Recovered forwarded
+    - Merges alerts from multiple channels
+    """
 
-    if "Issue" in original_message:
-        if key in recent_messages_cache and alert in recent_messages_cache[key]:
-            timestamp = recent_messages_cache[key][alert]['time']
-            return (datetime.now() - timestamp) <= timedelta(minutes=15)
+    entry = recent_messages_cache.get(alert_name)
 
-    elif "Triggered" in original_message:
-        if key in recent_messages_cache and alert in recent_messages_cache[key]:
-            timestamp = recent_messages_cache[key][alert]['time']
-            return (datetime.now() - timestamp) <= timedelta(minutes=60)
+    if not entry:
+        entry = {
+            "triggered": False,
+            "retriggered": False,
+            "warn": False,
+            "recovered": False,
+            "channels": set(),
+            "first_seen": datetime.now()
+        }
+        recent_messages_cache[alert_name] = entry
+
+    entry["channels"].add(channel_id)
+
+    if state == "Triggered":
+        if entry["triggered"]:
+            return False
+        entry["triggered"] = True
+        return True
+
+    if state == "Re-Triggered":
+        if entry["retriggered"]:
+            return False
+        entry["retriggered"] = True
+        return True
+
+    if state == "Warn":
+        if entry["warn"]:
+            return False
+        entry["warn"] = True
+        return True
+
+    if state == "Recovered":
+        if entry["recovered"]:
+            return False
+        entry["recovered"] = True
+        return True
 
     return False
 
 
-def update_recent_messages_cache(triggered_message, unstable=False):
-    alert, key = triggered_message
-    if not alert or not key:
-        return
-
-    recent_messages_cache.setdefault(key, {})
-    recent_messages_cache[key].setdefault(alert, {
-        "time": datetime.now(),
-        "trigger_count": 0
-    })
-
-    if unstable:
-        recent_messages_cache[key][alert]["trigger_count"] += 1
-
-    recent_messages_cache[key][alert]["time"] = datetime.now()
-
-
-def reset_sequence(triggered_message, original_message):
-    alert, key = triggered_message
-    try:
-        if "Recovered" in original_message:
-            recent_messages_cache.pop(key, None)
-        else:
-            recent_messages_cache.get(key, {}).pop(alert, None)
-    except Exception as e:
-        logger.error(e)
+def format_sources(alert_name):
+    channels = recent_messages_cache.get(alert_name, {}).get("channels", [])
+    return ", ".join(f"<#{cid}>" for cid in sorted(channels))
 
 
 def get_channel_name(channel_id):
-    try:
-        return app.client.conversations_info(channel=channel_id)["channel"]["name"]
-    except Exception:
-        return channel_id
+    resp = app.client.conversations_info(channel=channel_id)
+    return resp["channel"]["name"]
 
 
-def send_message_to_channel(original_message, channel_id, message_ts, channel_name):
+def send_to_target(original_message, channel_id, message_ts, state, alert_name):
+    channel_name = get_channel_name(channel_id)
+
     permalink = app.client.chat_getPermalink(
         channel=channel_id,
         message_ts=message_ts
     )["permalink"]
 
+    sources = format_sources(alert_name)
+
     final_message = (
-        f"{original_message}\n"
+        f"*{original_message}*\n"
+        f"Sources: {sources}\n"
         f"Link: <{permalink}|View message>\n"
         f"Channel: <#{channel_id}|{channel_name}>"
     )
 
+    color_map = {
+        "Triggered": "#E01E5A",
+        "Re-Triggered": "#E01E5A",
+        "Warn": "#ECB22E",
+        "Recovered": "#2EB67D"
+    }
+
     app.client.chat_postMessage(
         channel=target_channel_id,
-        text=final_message,
+        attachments=[
+            {
+                "color": color_map.get(state, "#CCCCCC"),
+                "text": final_message,
+                "mrkdwn_in": ["text"]
+            }
+        ],
         unfurl_links=False
     )
 
 # ---------------- CORE HANDLER ---------------- #
 
-def handle_filtered_message(original_message, channel_id, message_ts):
-    channel_name = get_channel_name(channel_id)
-    triggers = ["Disaster", "High"]
+def handle_alert(original_message, channel_id, message_ts):
+    state, alert_name = extract_alert(original_message)
 
-    if "Triggered" in original_message or ("started" in original_message and any(t in original_message for t in triggers)):
-        if "increased lag on Kafka" in original_message:
-            pattern = r'(Triggered:)(\s*([\w]+)\s*(.+))'
-        else:
-            pattern = r'(Triggered:)(.+)'
+    if not state:
+        return
 
-        triggered_message = extract_triggered_message(original_message, pattern)
+    if not should_forward_alert(alert_name, state, channel_id):
+        logger.info(f"Suppressed (merged): {state} | {alert_name}")
+        return
 
-        if not is_triggered_message_cached(triggered_message, original_message):
-            send_message_to_channel(original_message, channel_id, message_ts, channel_name)
-            update_recent_messages_cache(triggered_message)
-        else:
-            update_recent_messages_cache(triggered_message, unstable=True)
+    send_to_target(original_message, channel_id, message_ts, state, alert_name)
+    logger.info(f"Forwarded: {state} | {alert_name}")
 
-    elif "Recovered" in original_message or ("resolved" in original_message and any(t in original_message for t in triggers)):
-        pattern = r'(Recovered:)(.+)'
-        triggered_message = extract_triggered_message(original_message, pattern)
-        reset_sequence(triggered_message, original_message)
-        send_message_to_channel(original_message, channel_id, message_ts, channel_name)
+    # 🔁 Reset lifecycle after merged recovery
+    if state == "Recovered":
+        recent_messages_cache.pop(alert_name, None)
 
 # ---------------- MESSAGE HANDLERS ---------------- #
 
 @app.message(re.compile("|".join(include_patterns)))
 def handle_plain_messages(message, client):
-    channel_id = message["channel"]
-    if channel_id not in channel_ids:
-        logger.info(f"Ignoring message from channel {channel_id}")
+    if message["channel"] not in channel_ids:
         return
 
-    text = message.get("text", "")
+    text = message["text"]
+
     if any(re.search(p, text) for p in exclude_patterns):
         return
 
-    handle_filtered_message(text, channel_id, message["ts"])
+    handle_alert(text, message["channel"], message["ts"])
 
 
 @app.event("message")
-def handle_event_messages(body, logger, client):
+def handle_attachment_messages(body, logger, client):
     event = body["event"]
-    channel_id = event.get("channel")
 
-    if channel_id not in channel_ids:
-        logger.info(f"Ignoring event from channel {channel_id}")
+    if event.get("channel") not in channel_ids:
         return
 
-    text = event.get("text", "")
-    subtype = event.get("subtype")
-
-    # Datadog bot_message
-    if subtype == "bot_message" and text:
-        if any(re.search(p, text) for p in include_patterns):
-            handle_filtered_message(text, channel_id, event["ts"])
-
-    # Attachments (graphs)
     for attachment in event.get("attachments", []):
         fallback = attachment.get("fallback", "")
-        if fallback and any(re.search(p, fallback) for p in include_patterns):
-            handle_filtered_message(fallback, channel_id, event["ts"])
+        if not fallback:
+            continue
+
+        if any(re.search(p, fallback) for p in exclude_patterns):
+            continue
+
+        if any(re.search(p, fallback) for p in include_patterns):
+            handle_alert(fallback, event["channel"], event["ts"])
+
+# ---------------- BUTTON HANDLER ---------------- #
+
+@app.action("button_click")
+def button_click(ack, body, client):
+    ack()
+    client.reactions_add(
+        channel=body["channel"]["id"],
+        name="white_check_mark",
+        timestamp=body["message"]["ts"]
+    )
 
 # ---------------- MAIN ---------------- #
 
 if __name__ == "__main__":
-    logger.info("Starting Slackbot (legacy logic + fixed handlers)")
+    logger.info("Starting Slackbot (final merged-alert version)")
     SocketModeHandler(app, app_token).start()
