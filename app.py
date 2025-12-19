@@ -26,18 +26,6 @@ bot_token = os.environ.get("BOT_TOKEN")
 target_channel_id = os.environ.get("TARGET_CHANNEL_ID")
 channel_ids = os.environ.get("CHANNEL_IDS", "").split(",")
 
-if not app_token:
-    logger.warning("APP_TOKEN not found in the vault.")
-
-if not bot_token:
-    logger.warning("BOT_TOKEN not found in the vault.")
-
-if not target_channel_id:
-    logger.warning("TARGET_CHANNEL_ID not found in env.")
-
-if not channel_ids or channel_ids == [""]:
-    logger.warning("CHANNEL_IDS not found in env.")
-
 if not all([app_token, bot_token, target_channel_id]) or channel_ids == [""]:
     logger.error("Missing required environment variables. Aborting...")
     sys.exit(1)
@@ -47,7 +35,7 @@ if not all([app_token, bot_token, target_channel_id]) or channel_ids == [""]:
 app = App(token=bot_token)
 
 # ---------------- CACHE ---------------- #
-# alert_name -> lifecycle + timestamps + source channels
+# alert_name -> lifecycle + timestamps + channels
 
 recent_messages_cache = {}
 
@@ -85,9 +73,6 @@ include_patterns, exclude_patterns = load_filter_patterns(
 # ---------------- HELPERS ---------------- #
 
 def extract_alert(text):
-    """
-    Extract (state, alert_name) from alert text
-    """
     match = ALERT_REGEX.search(text)
     if not match:
         return None, None
@@ -98,10 +83,12 @@ def extract_alert(text):
 
 def should_forward_alert(alert_name, state, channel_id):
     """
-    Enforces:
+    Rules:
     - Time-window suppression
-    - First alert per lifecycle state
-    - Multi-channel merging
+    - Only first alert per lifecycle state
+    - Recovered allowed ONLY if incident was active
+      (Triggered or Re-Triggered forwarded)
+    - Merge alerts from multiple channels
     """
     now = datetime.now()
     entry = recent_messages_cache.get(alert_name)
@@ -110,12 +97,18 @@ def should_forward_alert(alert_name, state, channel_id):
         entry = {
             "states": {},
             "channels": set(),
+            "incident_active": False,
             "first_seen": now
         }
         recent_messages_cache[alert_name] = entry
 
-    # merge channel sources
+    # merge channel source
     entry["channels"].add(channel_id)
+
+    # 🚫 Block recovered if incident never active
+    if state == "Recovered" and not entry["incident_active"]:
+        logger.info(f"Suppressed Recovered without active incident: {alert_name}")
+        return False
 
     last_seen = entry["states"].get(state)
     window = TIME_WINDOWS.get(state)
@@ -124,7 +117,12 @@ def should_forward_alert(alert_name, state, channel_id):
         logger.info(f"Suppressed by time-window: {state} | {alert_name}")
         return False
 
+    # record state
     entry["states"][state] = now
+
+    if state in ("Triggered", "Re-Triggered"):
+        entry["incident_active"] = True
+
     return True
 
 
@@ -174,13 +172,13 @@ def handle_alert(original_message, channel_id, message_ts):
         return
 
     if not should_forward_alert(alert_name, state, channel_id):
-        logger.info(f"Suppressed (merged/window): {state} | {alert_name}")
+        logger.info(f"Suppressed: {state} | {alert_name}")
         return
 
     send_to_target(original_message, channel_id, message_ts, state, alert_name)
     logger.info(f"Forwarded: {state} | {alert_name}")
 
-    # Reset lifecycle after recovery
+    # 🔁 End lifecycle after recovery
     if state == "Recovered":
         recent_messages_cache.pop(alert_name, None)
 
@@ -207,7 +205,6 @@ def handle_attachment_messages(body, logger, client):
         return
 
     for attachment in event.get("attachments", []):
-        # Datadog / Grafana compatibility
         alert_text = (
             attachment.get("fallback")
             or attachment.get("title")
@@ -223,19 +220,8 @@ def handle_attachment_messages(body, logger, client):
         if any(re.search(p, alert_text) for p in include_patterns):
             handle_alert(alert_text, event["channel"], event["ts"])
 
-# ---------------- BUTTON HANDLER ---------------- #
-
-@app.action("button_click")
-def button_click(ack, body, client):
-    ack()
-    client.reactions_add(
-        channel=body["channel"]["id"],
-        name="white_check_mark",
-        timestamp=body["message"]["ts"]
-    )
-
 # ---------------- MAIN ---------------- #
 
 if __name__ == "__main__":
-    logger.info("Starting Slackbot (lifecycle + time-window + multi-channel)")
+    logger.info("Starting Slackbot (final lifecycle + time-window + recovery gated)")
     SocketModeHandler(app, app_token).start()
