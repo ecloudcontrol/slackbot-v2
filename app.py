@@ -3,7 +3,7 @@ import sys
 import re
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
@@ -26,8 +26,6 @@ bot_token = os.environ.get("BOT_TOKEN")
 target_channel_id = os.environ.get("TARGET_CHANNEL_ID")
 channel_ids = os.environ.get("CHANNEL_IDS", "").split(",")
 
-# ---- REQUIRED WARNING SECTION ---- #
-
 if not app_token:
     logger.warning("APP_TOKEN not found in the vault.")
 
@@ -49,9 +47,18 @@ if not all([app_token, bot_token, target_channel_id]) or channel_ids == [""]:
 app = App(token=bot_token)
 
 # ---------------- CACHE ---------------- #
-# alert_name -> state + merged channels
+# alert_name -> lifecycle + timestamps + source channels
 
 recent_messages_cache = {}
+
+# ---------------- TIME WINDOWS ---------------- #
+
+TIME_WINDOWS = {
+    "Triggered": timedelta(minutes=60),
+    "Re-Triggered": timedelta(minutes=60),
+    "Warn": timedelta(minutes=15),
+    "Recovered": timedelta(minutes=5),
+}
 
 # ---------------- ALERT REGEX ---------------- #
 
@@ -79,7 +86,7 @@ include_patterns, exclude_patterns = load_filter_patterns(
 
 def extract_alert(text):
     """
-    Extract (state, alert_name) from Slack / Datadog message
+    Extract (state, alert_name) from alert text
     """
     match = ALERT_REGEX.search(text)
     if not match:
@@ -92,65 +99,41 @@ def extract_alert(text):
 def should_forward_alert(alert_name, state, channel_id):
     """
     Enforces:
-    - Only FIRST Triggered / Re-Triggered / Warn / Recovered forwarded
-    - Merges alerts from multiple channels
+    - Time-window suppression
+    - First alert per lifecycle state
+    - Multi-channel merging
     """
-
+    now = datetime.now()
     entry = recent_messages_cache.get(alert_name)
 
     if not entry:
         entry = {
-            "triggered": False,
-            "retriggered": False,
-            "warn": False,
-            "recovered": False,
+            "states": {},
             "channels": set(),
-            "first_seen": datetime.now()
+            "first_seen": now
         }
         recent_messages_cache[alert_name] = entry
 
+    # merge channel sources
     entry["channels"].add(channel_id)
 
-    if state == "Triggered":
-        if entry["triggered"]:
-            return False
-        entry["triggered"] = True
-        return True
+    last_seen = entry["states"].get(state)
+    window = TIME_WINDOWS.get(state)
 
-    if state == "Re-Triggered":
-        if entry["retriggered"]:
-            return False
-        entry["retriggered"] = True
-        return True
+    if last_seen and window and (now - last_seen) <= window:
+        logger.info(f"Suppressed by time-window: {state} | {alert_name}")
+        return False
 
-    if state == "Warn":
-        if entry["warn"]:
-            return False
-        entry["warn"] = True
-        return True
-
-    if state == "Recovered":
-        if entry["recovered"]:
-            return False
-        entry["recovered"] = True
-        return True
-
-    return False
+    entry["states"][state] = now
+    return True
 
 
 def format_sources(alert_name):
-    channels = recent_messages_cache.get(alert_name, {}).get("channels", [])
+    channels = recent_messages_cache.get(alert_name, {}).get("channels", set())
     return ", ".join(f"<#{cid}>" for cid in sorted(channels))
 
 
-def get_channel_name(channel_id):
-    resp = app.client.conversations_info(channel=channel_id)
-    return resp["channel"]["name"]
-
-
 def send_to_target(original_message, channel_id, message_ts, state, alert_name):
-    channel_name = get_channel_name(channel_id)
-
     permalink = app.client.chat_getPermalink(
         channel=channel_id,
         message_ts=message_ts
@@ -159,9 +142,8 @@ def send_to_target(original_message, channel_id, message_ts, state, alert_name):
     sources = format_sources(alert_name)
 
     final_message = (
-        f"*<{permalink}|{original_message}>*\n"
-        f"Sources: {sources}\n"
-        f"Channel: <#{channel_id}|{channel_name}>"
+        f"<{permalink}|{original_message}>\n"
+        f"Sources: {sources}"
     )
 
     color_map = {
@@ -192,13 +174,13 @@ def handle_alert(original_message, channel_id, message_ts):
         return
 
     if not should_forward_alert(alert_name, state, channel_id):
-        logger.info(f"Suppressed (merged): {state} | {alert_name}")
+        logger.info(f"Suppressed (merged/window): {state} | {alert_name}")
         return
 
     send_to_target(original_message, channel_id, message_ts, state, alert_name)
     logger.info(f"Forwarded: {state} | {alert_name}")
 
-    # 🔁 Reset lifecycle after merged recovery
+    # Reset lifecycle after recovery
     if state == "Recovered":
         recent_messages_cache.pop(alert_name, None)
 
@@ -225,7 +207,7 @@ def handle_attachment_messages(body, logger, client):
         return
 
     for attachment in event.get("attachments", []):
-        # 🔥 FIX: Datadog may not use fallback
+        # Datadog / Grafana compatibility
         alert_text = (
             attachment.get("fallback")
             or attachment.get("title")
@@ -255,5 +237,5 @@ def button_click(ack, body, client):
 # ---------------- MAIN ---------------- #
 
 if __name__ == "__main__":
-    logger.info("Starting Slackbot (multi-channel Datadog fixed version)")
+    logger.info("Starting Slackbot (lifecycle + time-window + multi-channel)")
     SocketModeHandler(app, app_token).start()
