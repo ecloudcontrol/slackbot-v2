@@ -57,9 +57,6 @@ STATE_COLORS = {
 
 # ✅ Emoji mapping (NEW)
 STATE_EMOJIS = {
-    "Triggered": "🚨",
-    "Re-Triggered": "🚨",
-    "Warn": "⚠️",
     "Recovered": "✅",
 }
 
