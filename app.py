@@ -83,12 +83,13 @@ def extract_alert(text):
 
 def should_forward_alert(alert_name, state, channel_id):
     """
-    Rules:
-    - Time-window suppression
-    - Only first alert per lifecycle state
+    Lifecycle rules:
+    - Warn = early signal (does NOT activate incident)
+    - Triggered / Re-Triggered = incident active
     - Recovered allowed ONLY if incident was active
-      (Triggered or Re-Triggered forwarded)
-    - Merge alerts from multiple channels
+    - Warn suppressed after incident starts
+    - Time-window suppression
+    - Multi-channel merging
     """
     now = datetime.now()
     entry = recent_messages_cache.get(alert_name)
@@ -102,10 +103,15 @@ def should_forward_alert(alert_name, state, channel_id):
         }
         recent_messages_cache[alert_name] = entry
 
-    # merge channel source
+    # merge channel sources
     entry["channels"].add(channel_id)
 
-    # 🚫 Block recovered if incident never active
+    # 🚫 Suppress Warn after incident becomes active
+    if state == "Warn" and entry["incident_active"]:
+        logger.info(f"Suppressed Warn after incident active: {alert_name}")
+        return False
+
+    # 🚫 Block Recovered if incident never active
     if state == "Recovered" and not entry["incident_active"]:
         logger.info(f"Suppressed Recovered without active incident: {alert_name}")
         return False
@@ -117,9 +123,10 @@ def should_forward_alert(alert_name, state, channel_id):
         logger.info(f"Suppressed by time-window: {state} | {alert_name}")
         return False
 
-    # record state
+    # record state timestamp
     entry["states"][state] = now
 
+    # mark incident active
     if state in ("Triggered", "Re-Triggered"):
         entry["incident_active"] = True
 
@@ -223,5 +230,5 @@ def handle_attachment_messages(body, logger, client):
 # ---------------- MAIN ---------------- #
 
 if __name__ == "__main__":
-    logger.info("Starting Slackbot (final lifecycle + time-window + recovery gated)")
+    logger.info("Starting Slackbot (final lifecycle + warn-safe + time-window)")
     SocketModeHandler(app, app_token).start()
