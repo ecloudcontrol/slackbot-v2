@@ -185,16 +185,30 @@ def handle_alert(original_message, channel_id, message_ts):
     if channel_id not in channel_ids:
         return
 
+    entry = recent_messages_cache.setdefault(
+        alert_name,
+        {
+            "states": {},
+            "channels": set(),
+            "incident_active": False,
+            "first_seen": now_utc(),
+        }
+    )
+
+    # ✅ Always record source channel immediately
+    entry["channels"].add(channel_id)
+
     if any(re.search(p, original_message, re.IGNORECASE) for p in exclude_patterns):
         return
 
-    if not should_forward_alert(alert_name, state, channel_id):
+    if not should_forward_alert(alert_name, state):
         return
 
     send_to_target(original_message, channel_id, message_ts, state, alert_name)
 
     if state == "Recovered":
         recent_messages_cache.pop(alert_name, None)
+
 
 # ---------------- MESSAGE HANDLERS ---------------- #
 @app.message(re.compile("|".join(include_patterns), re.IGNORECASE))
