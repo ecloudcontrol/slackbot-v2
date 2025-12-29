@@ -18,7 +18,6 @@ logging.basicConfig(
     handlers=[logging.FileHandler(LOG_FILE, mode="a", encoding="utf-8")]
 )
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
 
 # ---------------- ENVIRONMENT ---------------- #
 REQUIRED_ENVS = ["APP_TOKEN", "BOT_TOKEN", "TARGET_CHANNEL_ID", "CHANNEL_IDS"]
@@ -29,9 +28,7 @@ bot_token = env["BOT_TOKEN"]
 target_channel_id = env["TARGET_CHANNEL_ID"]
 channel_ids = [c.strip() for c in env["CHANNEL_IDS"].split(",") if c.strip()]
 
-patterns_path = os.environ.get(
-    "PATTERNS_PATH", "/appz/scripts/webapps/patterns.json"
-)
+patterns_path = os.environ.get("PATTERNS_PATH", "/appz/scripts/webapps/patterns.json")
 
 if not all([app_token, bot_token, target_channel_id, channel_ids]):
     logger.error("Missing required environment variables. Aborting.")
@@ -99,43 +96,54 @@ def get_permalink(channel_id, message_ts):
         logger.error(f"Permalink error: {e}")
         return f"slack://channel?id={channel_id}&message={message_ts}"
 
-# ---------------- CACHE ---------------- #
+# ---------------- INCIDENT CACHE ---------------- #
 recent_messages_cache = {}
 
-def should_forward_alert(alert_name, state, channel_id):
-    now = now_utc()
-    entry = recent_messages_cache.setdefault(
+def get_incident(alert_name):
+    return recent_messages_cache.setdefault(
         alert_name,
         {
             "states": {},
-            "channels": set(),
+            "observed_channels": set(),
+            "origin_channel": None,
             "incident_active": False,
-            "first_seen": now,
+            "first_seen": now_utc(),
         }
     )
 
-    entry["channels"].add(channel_id)
+def should_forward_alert(alert_name, state):
+    now = now_utc()
+    incident = recent_messages_cache[alert_name]
 
-    if state == "Warn" and entry["incident_active"]:
+    # Lifecycle rules
+    if state == "Warn" and incident["incident_active"]:
+        logger.info(f"[DEDUP] Suppressing Warn during active incident: {alert_name}")
         return False
 
-    if state == "Recovered" and not entry["incident_active"]:
+    if state == "Recovered" and not incident["incident_active"]:
+        logger.info(f"[DEDUP] Suppressing orphan Recovered: {alert_name}")
         return False
 
-    last_seen = entry["states"].get(state)
+    last_seen = incident["states"].get(state)
     window = TIME_WINDOWS.get(state)
+
     if last_seen and window and (now - last_seen) <= window:
+        logger.info(
+            f"[DEDUP] Suppressing {state} within window "
+            f"({(now - last_seen).seconds}s): {alert_name}"
+        )
         return False
 
-    entry["states"][state] = now
+    incident["states"][state] = now
 
     if state in ("Triggered", "Re-Triggered"):
-        entry["incident_active"] = True
+        incident["incident_active"] = True
 
     return True
 
 def format_sources(alert_name):
-    chans = recent_messages_cache.get(alert_name, {}).get("channels", set())
+    incident = recent_messages_cache.get(alert_name, {})
+    chans = incident.get("observed_channels", set())
     return ", ".join(f"<#{c}>" for c in sorted(chans))
 
 # ---------------- SEND MESSAGE ---------------- #
@@ -144,7 +152,10 @@ def send_to_target(original_message, channel_id, message_ts, state, alert_name):
     sources = format_sources(alert_name)
     emoji = STATE_EMOJIS.get(state, "")
 
-    text = f"{emoji} <{permalink}|{original_message}>\nSources: {sources}"
+    text = (
+        f"{emoji} <{permalink}|{original_message}>\n"
+        f"*Sources:* {sources}"
+    )
 
     blocks = [
         {
@@ -153,7 +164,6 @@ def send_to_target(original_message, channel_id, message_ts, state, alert_name):
         }
     ]
 
-    # ✅ Add interactive button (NOT for Recovered)
     if state != "Recovered":
         blocks[0]["accessory"] = {
             "type": "button",
@@ -164,17 +174,17 @@ def send_to_target(original_message, channel_id, message_ts, state, alert_name):
             ),
         }
 
-    try:
-        app.client.chat_postMessage(
-            channel=target_channel_id,
-            blocks=blocks,
-            attachments=[
-                {"color": STATE_COLORS.get(state, "#CCCCCC")}
-            ],
-            unfurl_links=False,
-        )
-    except Exception as e:
-        logger.error(f"Send failed: {e}")
+    app.client.chat_postMessage(
+        channel=target_channel_id,
+        blocks=blocks,
+        attachments=[{"color": STATE_COLORS.get(state, "#CCCCCC")}],
+        unfurl_links=False,
+    )
+
+    logger.info(
+        f"[FORWARDED] {state} | {alert_name} | "
+        f"sources={sources}"
+    )
 
 # ---------------- CORE HANDLER ---------------- #
 def handle_alert(original_message, channel_id, message_ts):
@@ -185,21 +195,22 @@ def handle_alert(original_message, channel_id, message_ts):
     if channel_id not in channel_ids:
         return
 
-    entry = recent_messages_cache.setdefault(
-        alert_name,
-        {
-            "states": {},
-            "channels": set(),
-            "incident_active": False,
-            "first_seen": now_utc(),
-        }
-    )
-
-    # ✅ Always record source channel immediately
-    entry["channels"].add(channel_id)
-
     if any(re.search(p, original_message, re.IGNORECASE) for p in exclude_patterns):
         return
+
+    incident = get_incident(alert_name)
+
+    # Always record observed channel
+    incident["observed_channels"].add(channel_id)
+
+    # Set origin channel once
+    if not incident["origin_channel"] and state in ("Triggered", "Re-Triggered"):
+        incident["origin_channel"] = channel_id
+
+    logger.info(
+        f"[OBSERVED] {state} | {alert_name} | channel={channel_id} | "
+        f"observed={incident['observed_channels']}"
+    )
 
     if not should_forward_alert(alert_name, state):
         return
@@ -207,8 +218,8 @@ def handle_alert(original_message, channel_id, message_ts):
     send_to_target(original_message, channel_id, message_ts, state, alert_name)
 
     if state == "Recovered":
+        logger.info(f"[INCIDENT CLOSED] {alert_name}")
         recent_messages_cache.pop(alert_name, None)
-
 
 # ---------------- MESSAGE HANDLERS ---------------- #
 @app.message(re.compile("|".join(include_patterns), re.IGNORECASE))
@@ -246,11 +257,11 @@ def handle_button_click(ack, body, client, logger):
             timestamp=payload["message_ts"],
             name="white_check_mark",
         )
-        logger.info("white_check_mark added via button click")
+        logger.info("[ACTION] white_check_mark added via button")
     except Exception as e:
         logger.error(f"Reaction failed: {e}")
 
 # ---------------- MAIN ---------------- #
 if __name__ == "__main__":
-    logger.info("Starting Slackbot with lifecycle + confirmation button")
+    logger.info("Starting Slackbot (incident lifecycle + aggregation + debug)")
     SocketModeHandler(app, app_token).start()
