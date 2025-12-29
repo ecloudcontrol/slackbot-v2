@@ -1,17 +1,16 @@
 {
   "include_patterns": [
-    "(?i)issue\\s*[:\\-]?\\s*.+",
-    "(?i)triggered\\s*:\\s*.+",
-    "(?i)re-?triggered\\s*:\\s*.+",
-    "(?i)recovered\\s*:\\s*.+",
+    "(?i)(issue|triggered|re-?triggered|recovered)\\s*[:\\-]?.+",
 
     "(?i)prod\\s+parser\\s+is\\s+down",
-    "(?i)kafka.*lag",
-    "(?i)rds.*cpu.*high",
-    "(?i)load\\s+balancer.*(error|latency)",
-    "(?i)k8s.*(cpu|memory).*high"
+    "(?i)kafka.*(lag|delay)",
+    "(?i)rds.*(cpu|memory|storage).*high",
+    "(?i)load\\s+balancer.*(latency|error|5xx)",
+    "(?i)k8s.*(cpu|memory|restart|crash|oom)",
+    "(?i)pod.*(restart|crash|oom)",
+    "(?i)node.*(cpu|memory).*high"
   ],
-    "exclude_patterns": [
+  "exclude_patterns": [
     "(?:80|50)% Disk Space used on Volume\\s*/?\\s*Server\\s*:\\s*[\\w-]+",
     "(?:80|50)% RAM used on \\s*[\\w-]+",
     "(?:80|50)% CPU utilization on \\s*[\\w-]+"
