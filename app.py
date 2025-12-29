@@ -2,7 +2,6 @@ import os
 import sys
 import re
 import json
-import time
 import logging
 from datetime import datetime, timedelta
 from slack_bolt import App
@@ -10,8 +9,6 @@ from slack_bolt.adapter.socket_mode import SocketModeHandler
 
 # ---------------- CONFIGURATION ---------------- #
 LOG_FILE = os.environ.get("LOG_FILE", "/appz/log/slackbot.log")
-PATTERNS_PATH = os.environ.get("PATTERNS_PATH", "/appz/scripts/webapps/patterns.json")
-
 os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
 
 logging.basicConfig(
@@ -21,175 +18,225 @@ logging.basicConfig(
     handlers=[logging.FileHandler(LOG_FILE, mode="a", encoding="utf-8")]
 )
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 # ---------------- ENVIRONMENT ---------------- #
 REQUIRED_ENVS = ["APP_TOKEN", "BOT_TOKEN", "TARGET_CHANNEL_ID", "CHANNEL_IDS"]
 env = {k: os.environ.get(k) for k in REQUIRED_ENVS}
-
-if not all(env.values()):
-    logger.error("Missing required environment variables.")
-    sys.exit(1)
 
 app_token = env["APP_TOKEN"]
 bot_token = env["BOT_TOKEN"]
 target_channel_id = env["TARGET_CHANNEL_ID"]
 channel_ids = [c.strip() for c in env["CHANNEL_IDS"].split(",") if c.strip()]
 
+patterns_path = os.environ.get(
+    "PATTERNS_PATH", "/appz/scripts/webapps/patterns.json"
+)
+
+if not all([app_token, bot_token, target_channel_id, channel_ids]):
+    logger.error("Missing required environment variables. Aborting.")
+    sys.exit(1)
+
 # ---------------- SLACK APP ---------------- #
 app = App(token=bot_token)
 
-# ---------------- GLOBAL STATE ---------------- #
-CACHE_TTL = timedelta(hours=24)
-STATE_EMOJIS = {"Recovered": "✅"}
+# ---------------- CONSTANTS ---------------- #
+TIME_WINDOWS = {
+    "Triggered": timedelta(minutes=60),
+    "Re-Triggered": timedelta(minutes=60),
+    "Warn": timedelta(minutes=15),
+    "Recovered": timedelta(minutes=5),
+}
 
-recent_messages_cache = {}
-processed_messages = set()
+STATE_COLORS = {
+    "Triggered": "#E01E5A",
+    "Re-Triggered": "#E01E5A",
+    "Warn": "#ECB22E",
+    "Recovered": "#2EB67D",
+}
 
-compiled_includes = []
-compiled_excludes = []
-last_pattern_load = 0
-PATTERN_RELOAD_INTERVAL = 60  # seconds
+STATE_EMOJIS = {
+    "Recovered": "✅",
+}
 
-# ---------------- UTILITIES ---------------- #
+ALERT_REGEX = re.compile(
+    r'(?i)(Triggered|Recovered|Re-Triggered|Warn):\s*(?:\[[^\]]+\]\s*)*(.+)'
+)
+
+# ---------------- PATTERNS ---------------- #
+def load_filter_patterns(path):
+    try:
+        with open(path) as f:
+            data = json.load(f)
+            logger.info("patterns.json loaded")
+            return data.get("include_patterns", []), data.get("exclude_patterns", [])
+    except Exception as e:
+        logger.error(f"Failed to load patterns.json: {e}")
+        sys.exit(1)
+
+include_patterns, exclude_patterns = load_filter_patterns(patterns_path)
+
+# ---------------- HELPERS ---------------- #
 def now_utc():
     return datetime.utcnow()
 
-
-def log_timing(label, start):
-    elapsed = (time.time() - start) * 1000
-    logger.debug(f"{label} executed in {elapsed:.2f}ms")
-
-
-# ---------------- PATTERN LOADING ---------------- #
-def load_patterns():
-    global compiled_includes, compiled_excludes, last_pattern_load
-
-    try:
-        with open(PATTERNS_PATH) as f:
-            data = json.load(f)
-            compiled_includes = [
-                re.compile(p, re.IGNORECASE) for p in data.get("include_patterns", [])
-            ]
-            compiled_excludes = [
-                re.compile(p, re.IGNORECASE) for p in data.get("exclude_patterns", [])
-            ]
-            last_pattern_load = time.time()
-            logger.info("Pattern file loaded successfully")
-    except Exception as e:
-        logger.error(f"Failed to load patterns: {e}")
-
-
-def reload_patterns_if_needed():
-    if time.time() - last_pattern_load > 60:
-        load_patterns()
-
-
-# ---------------- CACHE MANAGEMENT ---------------- #
-def cleanup_cache():
-    now = now_utc()
-    for alert in list(recent_messages_cache.keys()):
-        if now - recent_messages_cache[alert]["first_seen"] > CACHE_TTL:
-            del recent_messages_cache[alert]
-
-
-def already_processed(ts):
-    if ts in processed_messages:
-        return True
-    processed_messages.add(ts)
-    return False
-
-
-# ---------------- ALERT LOGIC ---------------- #
 def extract_alert(text):
-    match = re.search(r"(Triggered|Recovered|Re-Triggered|Warn):\s*(.+)", text, re.I)
+    match = ALERT_REGEX.search(text)
     if not match:
         return None, None
-    return match.group(1), match.group(2)
+    state = match.group(1).title()
+    alert_name = match.group(2).split("\n")[0].strip()
+    return state, alert_name
 
+def get_permalink(channel_id, message_ts):
+    try:
+        r = app.client.chat_getPermalink(
+            channel=channel_id,
+            message_ts=message_ts
+        )
+        return r["permalink"]
+    except Exception as e:
+        logger.error(f"Permalink error: {e}")
+        return f"slack://channel?id={channel_id}&message={message_ts}"
 
-def should_forward(alert, state, channel):
-    cleanup_cache()
+# ---------------- CACHE ---------------- #
+recent_messages_cache = {}
 
+def should_forward_alert(alert_name, state, channel_id):
     now = now_utc()
-    entry = recent_messages_cache.setdefault(alert, {
-        "states": {},
-        "channels": set(),
-        "first_seen": now,
-        "active": False
-    })
+    entry = recent_messages_cache.setdefault(
+        alert_name,
+        {
+            "states": {},
+            "channels": set(),
+            "incident_active": False,
+            "first_seen": now,
+        }
+    )
 
-    entry["channels"].add(channel)
+    entry["channels"].add(channel_id)
 
-    if state == "Warn" and entry["active"]:
+    if state == "Warn" and entry["incident_active"]:
         return False
-    if state == "Recovered" and not entry["active"]:
+
+    if state == "Recovered" and not entry["incident_active"]:
         return False
 
-    last = entry["states"].get(state)
-    if last and (now - last) < timedelta(minutes=5):
+    last_seen = entry["states"].get(state)
+    window = TIME_WINDOWS.get(state)
+    if last_seen and window and (now - last_seen) <= window:
         return False
 
     entry["states"][state] = now
+
     if state in ("Triggered", "Re-Triggered"):
-        entry["active"] = True
+        entry["incident_active"] = True
 
     return True
 
+def format_sources(alert_name):
+    chans = recent_messages_cache.get(alert_name, {}).get("channels", set())
+    return ", ".join(f"<#{c}>" for c in sorted(chans))
 
-def get_permalink(channel, ts):
+# ---------------- SEND MESSAGE ---------------- #
+def send_to_target(original_message, channel_id, message_ts, state, alert_name):
+    permalink = get_permalink(channel_id, message_ts)
+    sources = format_sources(alert_name)
+    emoji = STATE_EMOJIS.get(state, "")
+
+    text = f"{emoji} <{permalink}|{original_message}>\nSources: {sources}"
+
+    blocks = [
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": text},
+        }
+    ]
+
+    # ✅ Add interactive button (NOT for Recovered)
+    if state != "Recovered":
+        blocks[0]["accessory"] = {
+            "type": "button",
+            "text": {"type": "plain_text", "text": "Have you fixed it?"},
+            "action_id": "button_click",
+            "value": json.dumps(
+                {"channel_id": channel_id, "message_ts": message_ts}
+            ),
+        }
+
     try:
-        return app.client.chat_getPermalink(channel=channel, message_ts=ts)["permalink"]
-    except Exception:
-        return f"slack://channel?id={channel}&message={ts}"
+        app.client.chat_postMessage(
+            channel=target_channel_id,
+            blocks=blocks,
+            attachments=[
+                {"color": STATE_COLORS.get(state, "#CCCCCC")}
+            ],
+            unfurl_links=False,
+        )
+    except Exception as e:
+        logger.error(f"Send failed: {e}")
 
-
-def send_to_target(text, channel, ts, state, alert):
-    emoji = STATE_EMOJIS["Recovered"] if state == "Recovered" else ""
-    permalink = get_permalink(channel, ts)
-    message = f"{emoji} <{permalink}|{text}>\nSources: <#{channel}>"
-
-    app.client.chat_postMessage(
-        channel=target_channel_id,
-        attachments=[{
-            "color": "#2EB67D" if state == "Recovered" else "#E01E5A",
-            "text": message,
-            "mrkdwn_in": ["text"]
-        }],
-        unfurl_links=False
-    )
-
-
-# ---------------- HANDLERS ---------------- #
-@app.message(re.compile(".*"))
-def handle_messages(message, say):
-    start = time.time()
-    reload_patterns_if_needed()
-
-    if already_processed(message["ts"]):
+# ---------------- CORE HANDLER ---------------- #
+def handle_alert(original_message, channel_id, message_ts):
+    state, alert_name = extract_alert(original_message)
+    if not state or not alert_name:
         return
 
-    text = message.get("text", "")
-    if not text:
+    if channel_id not in channel_ids:
         return
 
-    if not any(p.search(text) for p in compiled_includes):
+    if any(re.search(p, original_message, re.IGNORECASE) for p in exclude_patterns):
         return
 
-    if any(p.search(text) for p in compiled_excludes):
+    if not should_forward_alert(alert_name, state, channel_id):
         return
 
-    state, alert = extract_alert(text)
-    if not state:
+    send_to_target(original_message, channel_id, message_ts, state, alert_name)
+
+    if state == "Recovered":
+        recent_messages_cache.pop(alert_name, None)
+
+# ---------------- MESSAGE HANDLERS ---------------- #
+@app.message(re.compile("|".join(include_patterns), re.IGNORECASE))
+def handle_plain_messages(message, say):
+    handle_alert(message.get("text", ""), message["channel"], message["ts"])
+
+@app.event("message")
+def handle_attachment_messages(event, say):
+    if "attachments" not in event or event.get("subtype") == "message_deleted":
         return
 
-    if should_forward(alert, state, message["channel"]):
-        send_to_target(text, message["channel"], message["ts"], state, alert)
+    channel_id = event["channel"]
+    if channel_id not in channel_ids:
+        return
 
-    log_timing("Message processed", start)
+    for att in event.get("attachments", []):
+        alert_text = att.get("fallback") or att.get("title") or att.get("text")
+        if not alert_text:
+            continue
 
+        if any(re.search(p, alert_text, re.IGNORECASE) for p in exclude_patterns):
+            continue
 
-# ---------------- START ---------------- #
+        if any(re.search(p, alert_text, re.IGNORECASE) for p in include_patterns):
+            handle_alert(alert_text, channel_id, event["ts"])
+
+# ---------------- BUTTON ACTION ---------------- #
+@app.action("button_click")
+def handle_button_click(ack, body, client, logger):
+    ack()
+    try:
+        payload = json.loads(body["actions"][0]["value"])
+        client.reactions_add(
+            channel=payload["channel_id"],
+            timestamp=payload["message_ts"],
+            name="white_check_mark",
+        )
+        logger.info("white_check_mark added via button click")
+    except Exception as e:
+        logger.error(f"Reaction failed: {e}")
+
+# ---------------- MAIN ---------------- #
 if __name__ == "__main__":
-    load_patterns()
-    logger.info("🚀 Slack Alert Processor Started")
+    logger.info("Starting Slackbot with lifecycle + confirmation button")
     SocketModeHandler(app, app_token).start()
