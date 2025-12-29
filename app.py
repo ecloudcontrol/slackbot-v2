@@ -6,9 +6,9 @@ from datetime import datetime
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
-# =====================================================
+# ===============================
 # CONFIG
-# =====================================================
+# ===============================
 LOG_FILE = os.environ.get("LOG_FILE", "/appz/log/slackbot.log")
 os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
 
@@ -25,24 +25,33 @@ CHANNEL_IDS = [c.strip() for c in os.environ["CHANNEL_IDS"].split(",")]
 
 PATTERN_FILE = os.environ.get("PATTERNS_PATH", "/appz/scripts/webapps/patterns.json")
 
-# =====================================================
+# ===============================
 # LOAD PATTERNS
-# =====================================================
+# ===============================
 with open(PATTERN_FILE) as f:
-    data = json.load(f)
+    patterns = json.load(f)
 
-INCLUDE_PATTERNS = [re.compile(p, re.I) for p in data["include_patterns"]]
-EXCLUDE_PATTERNS = [re.compile(p, re.I) for p in data.get("exclude_patterns", [])]
+INCLUDE_PATTERNS = [re.compile(p, re.I) for p in patterns["include_patterns"]]
+EXCLUDE_PATTERNS = [re.compile(p, re.I) for p in patterns.get("exclude_patterns", [])]
 
-# =====================================================
-# STATE MANAGEMENT
-# =====================================================
-# alert_name -> { triggered, retriggered, recovered }
+# ===============================
+# ALERT STATE
+# ===============================
 alert_state = {}
+# structure:
+# {
+#   "alert_name": {
+#       "triggered": bool,
+#       "retriggered": bool,
+#       "recovered": bool,
+#       "sources": set(),
+#       "message_ts": str
+#   }
+# }
 
-# =====================================================
+# ===============================
 # HELPERS
-# =====================================================
+# ===============================
 def extract_alert(text):
     m = re.search(r"(Triggered|Re-Triggered|Recovered):\s*(.+)", text, re.I)
     if not m:
@@ -50,30 +59,30 @@ def extract_alert(text):
     return m.group(1).title(), m.group(2).strip()
 
 
-def should_forward(alert, state):
-    state = state.lower()
+def should_forward(alert, state, channel):
     entry = alert_state.setdefault(alert, {
         "triggered": False,
         "retriggered": False,
-        "recovered": False
+        "recovered": False,
+        "sources": set(),
+        "message_ts": None
     })
 
-    # Triggered
-    if state == "triggered":
+    entry["sources"].add(channel)
+
+    if state == "Triggered":
         if entry["triggered"]:
             return False
         entry["triggered"] = True
         return True
 
-    # Re-triggered
-    if state == "re-triggered":
+    if state == "Re-Triggered":
         if not entry["triggered"] or entry["retriggered"]:
             return False
         entry["retriggered"] = True
         return True
 
-    # Recovered
-    if state == "recovered":
+    if state == "Recovered":
         if not entry["triggered"] or entry["recovered"]:
             return False
         entry["recovered"] = True
@@ -82,16 +91,13 @@ def should_forward(alert, state):
     return False
 
 
-def get_permalink(app, channel, ts):
-    try:
-        return app.client.chat_getPermalink(channel=channel, message_ts=ts)["permalink"]
-    except Exception:
-        return ""
+def format_sources(alert):
+    return ", ".join(f"<#{c}>" for c in sorted(alert_state[alert]["sources"]))
 
 
-# =====================================================
+# ===============================
 # SLACK APP
-# =====================================================
+# ===============================
 app = App(token=BOT_TOKEN)
 
 
@@ -111,37 +117,37 @@ def handle_message(message, say):
     if not state:
         return
 
-    if not should_forward(alert, state):
+    if not should_forward(alert, state, channel):
         return
 
-    permalink = get_permalink(app, channel, ts)
+    permalink = app.client.chat_getPermalink(channel=channel, message_ts=ts)["permalink"]
+
+    sources = format_sources(alert)
+    content = f"<{permalink}|{text}>\nSources: {sources}"
 
     blocks = [{
         "type": "section",
-        "text": {
-            "type": "mrkdwn",
-            "text": f"<{permalink}|{text}>"
-        }
+        "text": {"type": "mrkdwn", "text": content}
     }]
 
-    # Show button only for recovered
+    # Add button only on recovery
     if state == "Recovered":
         blocks.append({
             "type": "actions",
-            "elements": [
-                {
-                    "type": "button",
-                    "text": {"type": "plain_text", "text": "Have you fixed it?"},
-                    "action_id": "confirm_recovery"
-                }
-            ]
+            "elements": [{
+                "type": "button",
+                "text": {"type": "plain_text", "text": "Have you fixed it?"},
+                "action_id": "confirm_recovery"
+            }]
         })
 
-    app.client.chat_postMessage(
+    res = app.client.chat_postMessage(
         channel=TARGET_CHANNEL,
         blocks=blocks,
         unfurl_links=False
     )
+
+    alert_state[alert]["message_ts"] = res["ts"]
 
 
 @app.action("confirm_recovery")
@@ -152,14 +158,14 @@ def handle_confirm(ack, body, client):
 
     client.reactions_add(
         channel=channel,
-        name="white_check_mark",
-        timestamp=ts
+        timestamp=ts,
+        name="white_check_mark"
     )
 
 
-# =====================================================
-# START BOT
-# =====================================================
+# ===============================
+# START
+# ===============================
 if __name__ == "__main__":
-    logging.info("🚀 Alert forwarding bot started")
+    logging.info("🚀 Alert aggregation service started")
     SocketModeHandler(app, APP_TOKEN).start()
