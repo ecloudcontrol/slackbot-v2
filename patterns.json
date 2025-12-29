@@ -34,7 +34,7 @@
     "(?i)\\[aws\\]\\s+rds\\s+anomaly\\s+in\\s+database\\s+connections\\s+on\\s+dbinstanceidentifier:[\\w-]+",
    "(?is).*issue\\s+started\\s+at.*name:\\s*port\\s*\\d+\\s+is\\s+down.*server:\\s*[\\w-]+.*",
     "(?i)prod\\s*-\\s*full\\s*node\\s*down\\s*-\\s*prod",
-    "(?i)issue[\\s\\S]+"
+     "(Issue)(.+)\\n(.+)\\n(.+)",
   ],
 
   "exclude_patterns": [
