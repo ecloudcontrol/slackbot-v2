@@ -150,28 +150,40 @@ def get_permalink(channel_id, message_ts):
 
 
 def send_to_target(original_message, channel_id, message_ts, state, alert_name):
-    """Send formatted alert to target channel."""
     permalink = get_permalink(channel_id, message_ts)
     sources = format_sources(alert_name)
 
-    # ✅ Add emoji prefix (NEW)
-    emoji = STATE_EMOJIS.get(state, "")
-    final_message = f"{emoji} <{permalink}|{original_message}>\nSources: {sources}"
+    # ❌ No emoji here
+    final_text = f"<{permalink}|{original_message}>\nSources: {sources}"
 
-    try:
-        app.client.chat_postMessage(
-            channel=target_channel_id,
-            attachments=[
+    blocks = [
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": final_text}
+        }
+    ]
+
+    # ✅ Add interactive button ONLY for Recovered
+    if state == "Recovered":
+        blocks.append({
+            "type": "actions",
+            "elements": [
                 {
-                    "color": STATE_COLORS.get(state, "#CCCCCC"),
-                    "text": final_message,
-                    "mrkdwn_in": ["text"]
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "Have you fixed it?"},
+                    "action_id": "mark_fixed",
+                    "value": json.dumps({
+                        "channel": channel_id,
+                        "ts": message_ts
+                    })
                 }
-            ],
-            unfurl_links=False
-        )
-    except Exception as e:
-        logger.error(f"Failed to post message: {e}")
+            ]
+        })
+
+    app.client.chat_postMessage(
+        channel=target_channel_id,
+        blocks=blocks
+    )
 
 
 # ---------------- CACHE ---------------- #
@@ -233,6 +245,40 @@ def handle_attachment_messages(event, say):
 
         if any(re.search(p, alert_text, re.IGNORECASE) for p in include_patterns):
             handle_alert(alert_text, channel_id, event["ts"])
+            
+@app.action("mark_fixed")
+def handle_mark_fixed(ack, body, client):
+    ack()
+
+    action = body["actions"][0]
+    value = json.loads(action["value"])
+    channel = value["channel"]
+    ts = value["ts"]
+
+    try:
+        # Fetch original message
+        result = client.conversations_history(
+            channel=channel,
+            latest=ts,
+            inclusive=True,
+            limit=1
+        )
+
+        msg = result["messages"][0]
+        text = msg.get("text", "")
+
+        # Add emoji prefix
+        updated_text = f"✅ {text}"
+
+        client.chat_update(
+            channel=channel,
+            ts=ts,
+            text=updated_text
+        )
+
+    except Exception as e:
+        logger.error(f"Failed to update message with emoji: {e}")
+
 
 
 # ---------------- MAIN ---------------- #
