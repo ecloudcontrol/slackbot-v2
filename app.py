@@ -2,16 +2,18 @@ import os
 import sys
 import re
 import json
+import time
 import logging
 from datetime import datetime, timedelta
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
-
 # ---------------- CONFIGURATION ---------------- #
-# Logging
 LOG_FILE = os.environ.get("LOG_FILE", "/appz/log/slackbot.log")
-os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)  # Ensure log dir exists
+PATTERNS_PATH = os.environ.get("PATTERNS_PATH", "/appz/scripts/webapps/patterns.json")
+
+os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(message)s",
@@ -19,269 +21,175 @@ logging.basicConfig(
     handlers=[logging.FileHandler(LOG_FILE, mode="a", encoding="utf-8")]
 )
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
 
-# Environment Variables
+# ---------------- ENVIRONMENT ---------------- #
 REQUIRED_ENVS = ["APP_TOKEN", "BOT_TOKEN", "TARGET_CHANNEL_ID", "CHANNEL_IDS"]
-env_vars = {k: os.environ.get(k) for k in REQUIRED_ENVS}
-app_token = env_vars["APP_TOKEN"]
-bot_token = env_vars["BOT_TOKEN"]
-target_channel_id = env_vars["TARGET_CHANNEL_ID"]
-channel_ids_raw = env_vars["CHANNEL_IDS"]
-channel_ids = [cid.strip() for cid in channel_ids_raw.split(",") if cid.strip()]
+env = {k: os.environ.get(k) for k in REQUIRED_ENVS}
 
-patterns_path = os.environ.get("PATTERNS_PATH", "/appz/scripts/webapps/patterns.json")
-
-if not all([app_token, bot_token, target_channel_id, channel_ids]):
-    logger.error("Missing required environment variables. Aborting...")
+if not all(env.values()):
+    logger.error("Missing required environment variables.")
     sys.exit(1)
+
+app_token = env["APP_TOKEN"]
+bot_token = env["BOT_TOKEN"]
+target_channel_id = env["TARGET_CHANNEL_ID"]
+channel_ids = [c.strip() for c in env["CHANNEL_IDS"].split(",") if c.strip()]
 
 # ---------------- SLACK APP ---------------- #
 app = App(token=bot_token)
 
+# ---------------- GLOBAL STATE ---------------- #
+CACHE_TTL = timedelta(hours=24)
+STATE_EMOJIS = {"Recovered": "✅"}
 
-# ---------------- CONSTANTS ---------------- #
-TIME_WINDOWS = {
-    "Triggered": timedelta(minutes=60),
-    "Re-Triggered": timedelta(minutes=60),
-    "Warn": timedelta(minutes=15),
-    "Recovered": timedelta(minutes=5),
-}
+recent_messages_cache = {}
+processed_messages = set()
 
-STATE_COLORS = {
-    "Triggered": "#E01E5A",
-    "Re-Triggered": "#E01E5A",
-    "Warn": "#ECB22E",
-    "Recovered": "#2EB67D"
-}
+compiled_includes = []
+compiled_excludes = []
+last_pattern_load = 0
+PATTERN_RELOAD_INTERVAL = 60  # seconds
 
-# ✅ Emoji mapping (NEW)
-STATE_EMOJIS = {
-    "Recovered": "✅",
-}
-
-ALERT_REGEX = re.compile(
-    r'(?i)(Triggered|Recovered|Re-Triggered|Warn):\s*(?:\[[^\]]+\]\s*)*(.+)'
-)
-
-
-# ---------------- PATTERN LOADING ---------------- #
-def load_filter_patterns(path):
-    try:
-        with open(path) as f:
-            data = json.load(f)
-            logger.info("patterns.json loaded successfully")
-            return data.get("include_patterns", []), data.get("exclude_patterns", [])
-    except Exception as e:
-        logger.error(f"Failed to load filter patterns: {e}")
-        sys.exit(1)
-
-
-include_patterns, exclude_patterns = load_filter_patterns(patterns_path)
-
-
-# ---------------- HELPERS ---------------- #
+# ---------------- UTILITIES ---------------- #
 def now_utc():
-    """Return current UTC datetime for consistency."""
     return datetime.utcnow()
 
 
+def log_timing(label, start):
+    elapsed = (time.time() - start) * 1000
+    logger.debug(f"{label} executed in {elapsed:.2f}ms")
+
+
+# ---------------- PATTERN LOADING ---------------- #
+def load_patterns():
+    global compiled_includes, compiled_excludes, last_pattern_load
+
+    try:
+        with open(PATTERNS_PATH) as f:
+            data = json.load(f)
+            compiled_includes = [
+                re.compile(p, re.IGNORECASE) for p in data.get("include_patterns", [])
+            ]
+            compiled_excludes = [
+                re.compile(p, re.IGNORECASE) for p in data.get("exclude_patterns", [])
+            ]
+            last_pattern_load = time.time()
+            logger.info("Pattern file loaded successfully")
+    except Exception as e:
+        logger.error(f"Failed to load patterns: {e}")
+
+
+def reload_patterns_if_needed():
+    if time.time() - last_pattern_load > 60:
+        load_patterns()
+
+
+# ---------------- CACHE MANAGEMENT ---------------- #
+def cleanup_cache():
+    now = now_utc()
+    for alert in list(recent_messages_cache.keys()):
+        if now - recent_messages_cache[alert]["first_seen"] > CACHE_TTL:
+            del recent_messages_cache[alert]
+
+
+def already_processed(ts):
+    if ts in processed_messages:
+        return True
+    processed_messages.add(ts)
+    return False
+
+
+# ---------------- ALERT LOGIC ---------------- #
 def extract_alert(text):
-    """Extract alert state and name from text."""
-    match = ALERT_REGEX.search(text)
+    match = re.search(r"(Triggered|Recovered|Re-Triggered|Warn):\s*(.+)", text, re.I)
     if not match:
         return None, None
-    state = match.group(1).strip().title()
-    alert_name = match.group(2).split("\n")[0].strip()
-    return state, alert_name
+    return match.group(1), match.group(2)
 
 
-def should_forward_alert(alert_name, state, channel_id):
-    """
-    Determine if alert should be forwarded based on lifecycle rules.
-    """
+def should_forward(alert, state, channel):
+    cleanup_cache()
+
     now = now_utc()
-    entry = recent_messages_cache.get(alert_name)
-    if not entry:
-        entry = {
-            "states": {},
-            "channels": set(),
-            "incident_active": False,
-            "first_seen": now
-        }
-        recent_messages_cache[alert_name] = entry
+    entry = recent_messages_cache.setdefault(alert, {
+        "states": {},
+        "channels": set(),
+        "first_seen": now,
+        "active": False
+    })
 
-    entry["channels"].add(channel_id)
+    entry["channels"].add(channel)
 
-    if state == "Warn" and entry["incident_active"]:
+    if state == "Warn" and entry["active"]:
+        return False
+    if state == "Recovered" and not entry["active"]:
         return False
 
-    if state == "Recovered" and not entry["incident_active"]:
-        return False
-
-    last_seen = entry["states"].get(state)
-    window = TIME_WINDOWS.get(state)
-    if last_seen and window and (now - last_seen) <= window:
+    last = entry["states"].get(state)
+    if last and (now - last) < timedelta(minutes=5):
         return False
 
     entry["states"][state] = now
-
     if state in ("Triggered", "Re-Triggered"):
-        entry["incident_active"] = True
+        entry["active"] = True
 
     return True
 
 
-def format_sources(alert_name):
-    channels = recent_messages_cache.get(alert_name, {}).get("channels", set())
-    return ", ".join(f"<#{cid}>" for cid in sorted(channels))
-
-
-def get_permalink(channel_id, message_ts):
+def get_permalink(channel, ts):
     try:
-        response = app.client.chat_getPermalink(
-            channel=channel_id,
-            message_ts=message_ts
-        )
-        return response["permalink"]
-    except Exception as e:
-        logger.error(f"Failed to get permalink: {e}")
-        return f"slack://channel?team=T00000000&id={channel_id}&msg={message_ts}"
+        return app.client.chat_getPermalink(channel=channel, message_ts=ts)["permalink"]
+    except Exception:
+        return f"slack://channel?id={channel}&message={ts}"
 
 
-def send_to_target(original_message, channel_id, message_ts, state, alert_name):
-    permalink = get_permalink(channel_id, message_ts)
-    sources = format_sources(alert_name)
-
-    # ❌ No emoji here
-    final_text = f"<{permalink}|{original_message}>\nSources: {sources}"
-
-    blocks = [
-        {
-            "type": "section",
-            "text": {"type": "mrkdwn", "text": final_text}
-        }
-    ]
-
-    # ✅ Add interactive button ONLY for Recovered
-    if state == "Recovered":
-        blocks.append({
-            "type": "actions",
-            "elements": [
-                {
-                    "type": "button",
-                    "text": {"type": "plain_text", "text": "Have you fixed it?"},
-                    "action_id": "mark_fixed",
-                    "value": json.dumps({
-                        "channel": channel_id,
-                        "ts": message_ts
-                    })
-                }
-            ]
-        })
+def send_to_target(text, channel, ts, state, alert):
+    emoji = STATE_EMOJIS["Recovered"] if state == "Recovered" else ""
+    permalink = get_permalink(channel, ts)
+    message = f"{emoji} <{permalink}|{text}>\nSources: <#{channel}>"
 
     app.client.chat_postMessage(
         channel=target_channel_id,
-        blocks=blocks
+        attachments=[{
+            "color": "#2EB67D" if state == "Recovered" else "#E01E5A",
+            "text": message,
+            "mrkdwn_in": ["text"]
+        }],
+        unfurl_links=False
     )
 
 
-# ---------------- CACHE ---------------- #
-recent_messages_cache = {}
+# ---------------- HANDLERS ---------------- #
+@app.message(re.compile(".*"))
+def handle_messages(message, say):
+    start = time.time()
+    reload_patterns_if_needed()
 
-
-# ---------------- CORE HANDLER ---------------- #
-def handle_alert(original_message, channel_id, message_ts):
-    state, alert_name = extract_alert(original_message)
-    if not state or not alert_name:
+    if already_processed(message["ts"]):
         return
 
-    if channel_id not in channel_ids:
-        return
-
-    if any(re.search(p, original_message, re.IGNORECASE) for p in exclude_patterns):
-        return
-
-    if not should_forward_alert(alert_name, state, channel_id):
-        return
-
-    send_to_target(original_message, channel_id, message_ts, state, alert_name)
-
-    if state == "Recovered":
-        recent_messages_cache.pop(alert_name, None)
-
-
-# ---------------- MESSAGE HANDLERS ---------------- #
-@app.message(re.compile("|".join(include_patterns), re.IGNORECASE))
-def handle_plain_messages(message, say):
     text = message.get("text", "")
-    handle_alert(text, message["channel"], message["ts"])
-
-
-@app.event("message")
-def handle_attachment_messages(event, say):
-    if "attachments" not in event or event.get("subtype") == "message_deleted":
+    if not text:
         return
 
-    channel_id = event["channel"]
-    if channel_id not in channel_ids:
+    if not any(p.search(text) for p in compiled_includes):
         return
 
-    text = event.get("text", "")
-    if text and re.search("|".join(include_patterns), text, re.IGNORECASE):
+    if any(p.search(text) for p in compiled_excludes):
         return
 
-    for attachment in event.get("attachments", []):
-        alert_text = (
-            attachment.get("fallback")
-            or attachment.get("title")
-            or attachment.get("text")
-        )
-        if not alert_text:
-            continue
+    state, alert = extract_alert(text)
+    if not state:
+        return
 
-        if any(re.search(p, alert_text, re.IGNORECASE) for p in exclude_patterns):
-            continue
+    if should_forward(alert, state, message["channel"]):
+        send_to_target(text, message["channel"], message["ts"], state, alert)
 
-        if any(re.search(p, alert_text, re.IGNORECASE) for p in include_patterns):
-            handle_alert(alert_text, channel_id, event["ts"])
-            
-@app.action("mark_fixed")
-def handle_mark_fixed(ack, body, client):
-    ack()
-
-    action = body["actions"][0]
-    value = json.loads(action["value"])
-    channel = value["channel"]
-    ts = value["ts"]
-
-    try:
-        # Fetch original message
-        result = client.conversations_history(
-            channel=channel,
-            latest=ts,
-            inclusive=True,
-            limit=1
-        )
-
-        msg = result["messages"][0]
-        text = msg.get("text", "")
-
-        # Add emoji prefix
-        updated_text = f"✅ {text}"
-
-        client.chat_update(
-            channel=channel,
-            ts=ts,
-            text=updated_text
-        )
-
-    except Exception as e:
-        logger.error(f"Failed to update message with emoji: {e}")
+    log_timing("Message processed", start)
 
 
-
-# ---------------- MAIN ---------------- #
+# ---------------- START ---------------- #
 if __name__ == "__main__":
-    logger.info("Starting Slackbot (lifecycle-managed with emojis)")
+    load_patterns()
+    logger.info("🚀 Slack Alert Processor Started")
     SocketModeHandler(app, app_token).start()
