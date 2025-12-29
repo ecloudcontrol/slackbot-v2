@@ -1,17 +1,21 @@
 {
   "include_patterns": [
-    "(?i)(?:[\\w-]+\\s+)?prod\\s+parser\\s+is\\s+down",
+
+    "(?i)prod\\s+parser\\s+is\\s+down",
+    "(?i)[a-z0-9_-]+\\s+prod\\s+parser\\s+is\\s+down",
     "(?i)parser\\s+is\\s+down\\s+on\\s+source:[\\w-]+",
 
-    "(?i)prod\\s*-?\\s*signer\\s+is\\s+down",
     "(?i)signer\\s+error",
+    "(?i)prod-\\s*signer\\s+is\\s+down",
 
     "(?i)consolidation\\s+api\\s+failure\\s*,?\\s*env\\s+prod",
 
-    "(?i)load\\s+balancer\\s+(latency\\s+increased|tls\\s+negotiation\\s+error|5xx\\s+errors)",
+    "(?i)load\\s+balancer\\s+latency\\s+increased",
+    "(?i)load\\s+balancer\\s+tls\\s+negotiation\\s+error",
+    "(?i)load\\s+balancer\\s+5xx\\s+errors",
     "(?i)prod\\s+lb\\s+request\\s+count\\s+drop",
 
-    "(?i)[\\w-]+\\s+increased\\s+lag\\s+on\\s+kafka",
+    "(?i)[a-z0-9_-]+\\s+increased\\s+lag\\s+on\\s+kafka",
     "(?i)base\\s+prod\\s+increased\\s+lag",
 
     "(?i)msk\\s+cpu\\s+system\\s+usage\\s+high\\s+on\\s+broker_id:\\d+",
@@ -21,24 +25,22 @@
 
     "(?i)memory\\s+utilisation\\s+of\\s+k8s\\s+deployments\\s+on\\s+kube_deployment:[\\w-]+",
 
-    "(?i)cpu\\s+load\\s+is\\s+very\\s+high\\s+on\\s+[\\w-]+",
-    "(?i)db\\s+load\\s+is\\s+very\\s+high\\s+on\\s+[\\w-]+",
+    "(?i)cpu\\s+load\\s+is\\s+very\\s+high\\s+on.*",
+    "(?i)db\\s+load\\s+is\\s+very\\s+high\\s+on.*",
 
     "(?i)\\[aws\\]\\s+rds\\s+cpu\\s+utilization\\s+is\\s+high\\s+on\\s+dbinstanceidentifier:[\\w-]+",
-    "(?i)\\[aws\\]\\s+rds\\s+storage\\s+utilization\\s+is\\s+high\\s+on\\s+dbinstanceidentifier:[\\w-]+",
+    "(?i)\\[aws\\]\\s+rds\\s+storage\\s+utilization\\s+is\\s+high\\s+on\\s+dbinstanceidentifier:[\\w-]+,engine:(mysql|mysql)",
     "(?i)\\[aws\\]\\s+rds\\s+freeable\\s+memory\\s+alert\\s+on\\s+dbinstanceidentifier:[\\w-]+",
     "(?i)\\[aws\\]\\s+rds\\s+anomaly\\s+in\\s+database\\s+connections\\s+on\\s+dbinstanceidentifier:[\\w-]+",
+    
 
-    "(?i)issue\\s+started\\s+at\\s+.*?name:\\s*port\\s*\\d+\\s+is\\s+down\\s+server:\\s*[\\w-]+",
-     "(Issue)(.+)\\n(.+)\\n(.+)",
-
-    "(?i)prod\\s*-\\s*full\\s*node\\s*down\\s*-\\s*prod"
+    "(?i)prod\\s*-\\s*full\\s*node\\s*down\\s*-\\s*prod",
+    "(?i)issue[\\s\\S]+"
   ],
-  
+
   "exclude_patterns": [
     "(?:80|50)% Disk Space used on Volume\\s*/?\\s*Server\\s*:\\s*[\\w-]+",
     "(?:80|50)% RAM used on \\s*[\\w-]+",
     "(?:80|50)% CPU utilization on \\s*[\\w-]+"
   ]
-}
 }
