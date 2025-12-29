@@ -35,7 +35,8 @@
     
 
     "(?i)prod\\s*-\\s*full\\s*node\\s*down\\s*-\\s*prod",
-    "(?i)issue[\\s\\S]+"
+    "(?i)issue[\\s\\S]+",
+    "(Issue)(.+)\\n(.+)\\n(.+)"
   ],
 
   "exclude_patterns": [
