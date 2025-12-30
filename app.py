@@ -119,10 +119,8 @@ def post_recovery_message(recovery_text, sources, target_channel_id):
             unfurl_links=False
         )
         logger.info("sending message to target channel: {}".format(recovery_text))
-        return app.client.chat_postMessage(channel=target_channel_id, text=final_message, blocks=blocks, unfurl_links=False)['ts']
     except Exception as e:
         logger.error("Exception posting recovery: {}".format(e), exc_info=True)
-        return None
 def edit_alert_message(entry, target_channel_id):
     final_message = build_merged_message(entry['source_channels'], entry['original_alert'], False)
     blocks = [
@@ -149,35 +147,13 @@ def edit_alert_message(entry, target_channel_id):
         logger.info("Edited alert message with additional channel")
     except Exception as e:
         logger.error("Exception editing alert: {}".format(e), exc_info=True)
-def edit_recovery_message(entry, target_channel_id):
-    final_message = build_merged_message(entry['recovery_sources'], entry['recovery_text'], True)
-    blocks = [
-        {
-            "type": "section",
-            "text": {"type": "mrkdwn", "text": final_message}
-        }
-    ]
-    try:
-        app.client.chat_update(
-            channel=target_channel_id,
-            ts=entry['recovered_posted_ts'],
-            text=final_message,
-            blocks=blocks
-        )
-        logger.info("Edited recovery message with additional channel")
-    except Exception as e:
-        logger.error("Exception editing recovery: {}".format(e), exc_info=True)
 def is_triggered_message_cached(triggered_message, original_message):
     if "Issue" in original_message:
         #logger.info("{}".format("issue in original_message"))
         if triggered_message[1] in recent_messages_cache:
             if triggered_message[0] in recent_messages_cache[triggered_message[1]]:
-                entry = recent_messages_cache[triggered_message[1]][triggered_message[0]]
-                if entry.get('recovered', False):
-                    del recent_messages_cache[triggered_message[1]][triggered_message[0]]
-                    return False
                 logger.info("{}".format("issue in recent cache"))
-                timestamp = entry['time']
+                timestamp = recent_messages_cache[triggered_message[1]][triggered_message[0]]['time']
                 if (datetime.now() - timestamp) <= timedelta(minutes=15):
                     logger.info("{}".format("Triggered within 15mins"))
                     return True
@@ -189,11 +165,7 @@ def is_triggered_message_cached(triggered_message, original_message):
             return False
     elif "Triggered" in original_message:
         if triggered_message[1] in recent_messages_cache and triggered_message[0] in recent_messages_cache[triggered_message[1]]:
-            entry = recent_messages_cache[triggered_message[1]][triggered_message[0]]
-            if entry.get('recovered', False):
-                del recent_messages_cache[triggered_message[1]][triggered_message[0]]
-                return False
-            timestamp = entry['time']
+            timestamp = recent_messages_cache[triggered_message[1]][triggered_message[0]]['time']
             if (datetime.now() - timestamp) <= timedelta(minutes=60):
                 logger.info("{}".format("Triggered within 1hr"))
                 return True
@@ -216,11 +188,7 @@ def update_recent_messages_cache(triggered_message, unstable=False, source=None,
             'source_channels': [],
             'posted_ts': None,
             'original_alert': None,
-            'recovered': False,
-            'recovery_sources': [],
-            'recovery_text': None,
-            'recovered_posted_ts': None,
-            'recovery_start_time': None
+            'recovered': False
         }
     entry = recent_messages_cache[triggered_message[1]][key]
     if source:
@@ -295,65 +263,42 @@ def handle_filtered_message(message, client, event_message, event_channel, event
         if "prod parser is down" in original_message:
             pattern = r'(Recovered:)(\s*([^\s]+)\s+(.+))'
         elif "increased lag on Kafka" in original_message:
-            pattern = r'(Recovered:)(\s*([\w]+)\s*(.+))'
+            pattern = r'(Triggered:)(\s*([\w]+)\s*(.+))'
         else:
             pattern = r'(Recovered:)(.+[ ](.+))'
         triggered_message = extract_triggered_message(original_message,pattern)
-        timeout_minutes = 15 if triggered_message[1] == 'Issue' else 60
-        timeout = timedelta(minutes=timeout_minutes)
-        entry = None
+        is_resolved = "resolved" in original_message and any(trigger in original_message for trigger in triggers)
         skip = False
+        entry = None
         try:
             if triggered_message[1] in recent_messages_cache and triggered_message[0] in recent_messages_cache[triggered_message[1]]:
                 entry = recent_messages_cache[triggered_message[1]][triggered_message[0]]
-                if (datetime.now() - entry['time']) > timeout:
-                    del recent_messages_cache[triggered_message[1]][triggered_message[0]]
-                    entry = None
-                else:
-                    is_resolved = "resolved" in original_message and any(trigger in original_message for trigger in triggers)
-                    if is_resolved and entry['trigger_count'] < 3 :
-                        skip = True
-                        logger.info("Skipping due to trigger count < 3: {}".format(entry['trigger_count']))
+                if is_resolved and entry['trigger_count'] < 3 :
+                    skip = True
+                    logger.info("Skipping due to trigger count < 3: {}".format(entry['trigger_count']))
         except Exception:
             pass
-        if skip:
-            logger.info("Skipped recovery message: {}".format(original_message))
-            return
-        permalink = get_permalink(channel_id, message_ts)
-        source = {
-            'name': channel_name,
-            'id': channel_id,
-            'link': permalink
-        } if permalink else {
-            'name': channel_name,
-            'id': channel_id,
-            'link': None
-        }
-        if not entry:
-            # Standalone recovery (rare)
-            post_recovery_message(original_message, [source], target_channel_id)
-            return
-        # Append to recovery sources
-        entry['recovery_sources'].append(source)
-        now = datetime.now()
-        if entry['recovered_posted_ts'] is None:
-            # First recovery
-            posted_ts = post_recovery_message(original_message, entry['recovery_sources'], target_channel_id)
-            if posted_ts:
-                entry['recovered_posted_ts'] = posted_ts
-                entry['recovery_text'] = original_message
-                entry['recovery_start_time'] = now
-                entry['recovered'] = True
-                logger.info("Resetting message: {}".format(original_message))
-        else:
-            # Subsequent recovery
-            recovery_start_time = entry['recovery_start_time']
-            if (now - recovery_start_time) <= timedelta(minutes=15):
-                edit_recovery_message(entry, target_channel_id)
-                logger.info("Merged subsequent recovery: {}".format(original_message))
+        if not skip:
+            logger.info("Resetting message: {}".format(original_message))
+            permalink = get_permalink(channel_id, message_ts)
+            source = {
+                'name': channel_name,
+                'id': channel_id,
+                'link': permalink
+            } if permalink else {
+                'name': channel_name,
+                'id': channel_id,
+                'link': None
+            }
+            if entry:
+                if not entry['recovered']:
+                    post_recovery_message(original_message, entry['source_channels'], target_channel_id)
+                    entry['recovered'] = True
             else:
-                logger.info("Late recovery, skipping: {}".format(original_message))
-        entry['time'] = now
+                post_recovery_message(original_message, [source], target_channel_id)
+            reset_sequence(triggered_message, original_message)
+        else:
+            logger.info("Skipped recovery message: {}".format(original_message))
     logger.info("{}".format("Finished session"))
 try:
     app = App(token=bot_token)
