@@ -63,6 +63,12 @@ ALERT_REGEX = re.compile(
     r'(?i)(Triggered|Recovered|Re-Triggered|Warn):\s*(?:\[[^\]]+\]\s*)*(.+)'
 )
 
+ZABBIX_REGEX = re.compile(
+    r"(?is)"
+    r"(Issue\s+(started|resolved).+?)\n"
+    r"Name:\s*(.+?)\n"
+    r"Server:\s*(.+?)(?:\n|$)"
+)
 # ---------------- PATTERNS ---------------- #
 def load_filter_patterns(path):
     try:
@@ -81,13 +87,40 @@ def now_utc():
     return datetime.utcnow()
 
 def extract_alert(text):
+    # Datadog / standard alerts
     match = ALERT_REGEX.search(text)
+    if match:
+        state = match.group(1).title()
+        alert_name = match.group(2).split("\n")[0].strip()
+        return state, alert_name
+
+    # Zabbix alerts
+    return extract_zabbix_alert(text)
+
+def extract_zabbix_alert(text):
+    """
+    Parses Zabbix alerts and maps them to internal states.
+    """
+    match = ZABBIX_REGEX.search(text)
     if not match:
         return None, None
-    state = match.group(1).title()
-    alert_name = match.group(2).split("\n")[0].strip()
-    return state, alert_name
 
+    lifecycle = match.group(2).lower()
+    alert_name = match.group(3).strip()
+    server = match.group(4).strip()
+
+    if lifecycle == "started":
+        state = "Triggered"
+    elif lifecycle == "resolved":
+        state = "Recovered"
+    else:
+        return None, None
+
+    # Prevent cross-host alert collision
+    full_alert_name = f"{alert_name} ({server})"
+
+    return state, full_alert_name
+    
 def get_permalink(channel_id, message_ts):
     try:
         r = app.client.chat_getPermalink(
