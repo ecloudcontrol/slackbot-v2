@@ -98,16 +98,23 @@ def is_triggered_message_cached(triggered_message, original_message):
     else:
         return False
 
-def update_recent_messages_cache(triggered_message, unstable=False):
-    if triggered_message[1] not in recent_messages_cache:
-        recent_messages_cache[triggered_message[1]] = {}
-    if triggered_message[0] not in recent_messages_cache[triggered_message[1]]:
-        recent_messages_cache[triggered_message[1]][triggered_message[0]] = {}
-        recent_messages_cache[triggered_message[1]][triggered_message[0]]['time'] = datetime.now()
-        recent_messages_cache[triggered_message[1]][triggered_message[0]]['trigger_count'] = 0  # Initialize here
+def update_recent_messages_cache(triggered_message, source_channel, unstable=False):
+    key = triggered_message[0]
+
+    if key not in recent_messages_cache:
+        recent_messages_cache[key] = {
+          "sources": set(),
+    "time": datetime.now(),
+    "trigger_count": 1
+}
+
+    recent_messages_cache[key]["sources"].add(source_channel)
+
     if unstable:
-        recent_messages_cache[triggered_message[1]][triggered_message[0]]['trigger_count'] += 1
-        recent_messages_cache[triggered_message[1]][triggered_message[0]]['time'] = datetime.now()
+        recent_messages_cache[key]["trigger_count"] += 1
+
+    recent_messages_cache[key]["time"] = datetime.now()
+
         
 def reset_sequence(triggered_message, original_message):
     try:
@@ -132,7 +139,15 @@ def send_message_to_channel(app, logger, message, original_message, channel_name
         original_message_permalink = response['permalink']
         original_message_link = "<{}|View message>".format(original_message_permalink)
         channel_link = "<#{}|{}>".format(channel_id, channel_name)
-        final_message = "{}\n Link: {}\n Channel: {}".format(original_message, original_message_link, channel_link)
+        sources = ", ".join(
+    recent_messages_cache.get(triggered_message[0], {}).get("sources", [])
+)
+final_message = (
+    f"{original_message}\n"
+    f"*Sources:* {sources}\n"
+    f"Link: {original_message_link}"
+)
+
 
         if "Recovered" not in original_message and "resolved" not in original_message:
             # Post the message in the target channel and update the recent messages cache
@@ -160,7 +175,7 @@ def send_message_to_channel(app, logger, message, original_message, channel_name
                 triggered_message = extract_triggered_message(original_message, pattern)
                 update_recent_messages_cache(triggered_message, unstable=True)
             else:
-                update_recent_messages_cache(triggered_message)
+                update_recent_messages_cache(triggered_message, channel_name)
             logger.info("recent_messages_cache after update: {}".format(recent_messages_cache))
         else:
             # Post the message in the target channel without updating the cache
@@ -212,7 +227,7 @@ def handle_filtered_message(message, client, event_message, event_channel, event
                 triggered_message = extract_triggered_message(original_message, pattern)
                 update_recent_messages_cache(triggered_message, unstable=True)
             else:
-                update_recent_messages_cache(triggered_message)
+                update_recent_messages_cache(triggered_message, channel_name)
             logger.info("recent_messages_cache after update: {}".format(recent_messages_cache))
 
     elif "Recovered" in triggered_message or ("resolved" in original_message and any(trigger in original_message for trigger in triggers)):
