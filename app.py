@@ -47,15 +47,16 @@ def extract_triggered_message(original_message, pattern):
     logger.info("{}".format("Matching message"))
     match1 = re.search(pattern, original_message)
     match2 = re.search(r'(Name:(.+\n.+)())', original_message)
-   
+  
     if match1:
-        match = match1
-        #logger.info("Match output: {}".format(match.group(2)))
-        return match.group(2),match.group(3)
+        service = match1.group(2)
+        desc = match1.group(3).strip()
+        full_key = f"{service} {desc}"
+        return full_key, service
     elif match2:
-        match = match2
-        #logger.info("Match output: {}".format(match.group(2)))
-        return match.group(2), 'Issue'
+        full_key = match2.group(2).strip()
+        return full_key, 'Issue'
+    return None, None
 def get_permalink(channel_id, message_ts):
     try:
         response = app.client.chat_getPermalink(channel=channel_id, message_ts=message_ts)
@@ -149,40 +150,51 @@ def edit_alert_message(entry, target_channel_id):
         logger.error("Exception editing alert: {}".format(e), exc_info=True)
 def is_triggered_message_cached(triggered_message, original_message):
     if "Issue" in original_message:
-        #logger.info("{}".format("issue in original_message"))
         if triggered_message[1] in recent_messages_cache:
             if triggered_message[0] in recent_messages_cache[triggered_message[1]]:
-                logger.info("{}".format("issue in recent cache"))
+                logger.info("Cache hit for Issue")
                 timestamp = recent_messages_cache[triggered_message[1]][triggered_message[0]]['time']
                 if (datetime.now() - timestamp) <= timedelta(minutes=15):
-                    logger.info("{}".format("Triggered within 15mins"))
                     return True
                 else:
                     del recent_messages_cache[triggered_message[1]][triggered_message[0]]
-                    logger.info("recent_messages_cache after delete: {}".format(recent_messages_cache))
+                    logger.info("Expired Issue cache entry")
                     return False
-        else:
-            return False
-    elif "Triggered" in original_message:
+        logger.info("No cache for Issue")
+        return False
+    else:
         if triggered_message[1] in recent_messages_cache and triggered_message[0] in recent_messages_cache[triggered_message[1]]:
+            logger.info("Cache hit for Triggered")
             timestamp = recent_messages_cache[triggered_message[1]][triggered_message[0]]['time']
             if (datetime.now() - timestamp) <= timedelta(minutes=60):
-                logger.info("{}".format("Triggered within 1hr"))
                 return True
             else:
                 del recent_messages_cache[triggered_message[1]][triggered_message[0]]
-                logger.info("recent_messages_cache after delete: {}".format(recent_messages_cache))
+                logger.info("Expired Triggered cache entry")
                 return False
-        else:
-            return False
-    else:
+        logger.info("No cache for Triggered")
         return False
+def is_recovery_cached(triggered_message, original_message):
+    service = triggered_message[1]
+    full_key = triggered_message[0]
+    if service in recovered_alerts and full_key in recovered_alerts[service]:
+        logger.info("Recovery cache hit")
+        timestamp = recovered_alerts[service][full_key]['time']
+        if (datetime.now() - timestamp) <= timedelta(minutes=60):
+            return True
+        else:
+            del recovered_alerts[service][full_key]
+            logger.info("Expired recovery cache entry")
+            return False
+    logger.info("No recovery cache")
+    return False
 def update_recent_messages_cache(triggered_message, unstable=False, source=None, original_alert=None, posted_ts=None):
-    if triggered_message[1] not in recent_messages_cache:
-        recent_messages_cache[triggered_message[1]] = {}
-    key = triggered_message[0]
-    if key not in recent_messages_cache[triggered_message[1]]:
-        recent_messages_cache[triggered_message[1]][key] = {
+    service = triggered_message[1]
+    full_key = triggered_message[0]
+    if service not in recent_messages_cache:
+        recent_messages_cache[service] = {}
+    if full_key not in recent_messages_cache[service]:
+        recent_messages_cache[service][full_key] = {
             'time': datetime.now(),
             'trigger_count': 0,
             'source_channels': [],
@@ -190,7 +202,7 @@ def update_recent_messages_cache(triggered_message, unstable=False, source=None,
             'original_alert': None,
             'recovered': False
         }
-    entry = recent_messages_cache[triggered_message[1]][key]
+    entry = recent_messages_cache[service][full_key]
     if source:
         entry['source_channels'].append(source)
     if original_alert is not None:
@@ -201,16 +213,23 @@ def update_recent_messages_cache(triggered_message, unstable=False, source=None,
         entry['trigger_count'] += 1
     entry['time'] = datetime.now()
     logger.info("recent_messages_cache after update: {}".format(recent_messages_cache))
-   
+def update_recovered_cache(triggered_message):
+    service = triggered_message[1]
+    full_key = triggered_message[0]
+    if service not in recovered_alerts:
+        recovered_alerts[service] = {}
+    recovered_alerts[service][full_key] = {'time': datetime.now()}
+    logger.info("Updated recovered cache for: {}".format(full_key))
 def reset_sequence(triggered_message, original_message):
     try:
+        service = triggered_message[1]
+        full_key = triggered_message[0]
         logger.info("Popping message: {}".format(triggered_message))
-        if "Recovered" in original_message:
-            pop_value = recent_messages_cache.pop(triggered_message[1], 'Nothing to pop')
-        else:
-            pop_value = recent_messages_cache[triggered_message[1]].pop(triggered_message[0], 'Nothing to clear')
+        if service in recent_messages_cache:
+            recent_messages_cache[service].pop(full_key, None)
+            if not recent_messages_cache[service]:  # Optional: clean empty service
+                del recent_messages_cache[service]
         logger.info("recent_messages_cache after reset: {}".format(recent_messages_cache))
-        logger.info("Popped value: {}".format(pop_value))
     except Exception as err:
         logger.error("{}".format(err))
 def handle_filtered_message(message, client, event_message, event_channel, event_ts):
@@ -229,16 +248,15 @@ def handle_filtered_message(message, client, event_message, event_channel, event
         message_ts = message['ts']
     channel_name = get_channel_name(channel_id)
     triggers = ["Disaster", "High"]
-   
+    unified_pattern = r'(Triggered|Recovered):\s*([^\s]+)\s+(.+)'
+  
     #for any trigger:
     if "Triggered" in triggered_message or ("started" in original_message and any(trigger in original_message for trigger in triggers)):
-        if "prod parser is down" in original_message:
-            pattern = r'(Triggered:)(\s*([^\s]+)\s+(.+))'
-        elif "increased lag on Kafka" in original_message:
-            pattern = r'(Triggered:)(\s*([\w]+)\s*(.+))'
-        else:
-            pattern = r'(Triggered:)(.+[ ](.+)[ ].+)'
-        triggered_message = extract_triggered_message(original_message, pattern)
+        extracted = extract_triggered_message(original_message, unified_pattern)
+        if not extracted[0]:  # No match
+            logger.warning("No pattern match for triggered message")
+            return
+        triggered_message = extracted
         permalink = get_permalink(channel_id, message_ts)
         source = {
             'name': channel_name,
@@ -251,35 +269,40 @@ def handle_filtered_message(message, client, event_message, event_channel, event
         }
         unstable = "started" in original_message and any(trigger in original_message for trigger in triggers)
         if not is_triggered_message_cached(triggered_message, original_message):
+            logger.info("New alert - posting")
             posted_ts = post_alert_message(original_message, [source], target_channel_id)
             if posted_ts:
                 update_recent_messages_cache(triggered_message, unstable=unstable, source=source, original_alert=original_message, posted_ts=posted_ts)
         else:
+            logger.info("Updating existing alert")
             update_recent_messages_cache(triggered_message, unstable=unstable, source=source, original_alert=None, posted_ts=None)
             entry = recent_messages_cache[triggered_message[1]][triggered_message[0]]
             if entry['posted_ts']:
                 edit_alert_message(entry, target_channel_id)
     elif "Recovered" in triggered_message or ("resolved" in original_message and any(trigger in original_message for trigger in triggers)):
-        if "prod parser is down" in original_message:
-            pattern = r'(Recovered:)(\s*([^\s]+)\s+(.+))'
-        elif "increased lag on Kafka" in original_message:
-            pattern = r'(Triggered:)(\s*([\w]+)\s*(.+))'
-        else:
-            pattern = r'(Recovered:)(.+[ ](.+))'
-        triggered_message = extract_triggered_message(original_message,pattern)
+        extracted = extract_triggered_message(original_message, unified_pattern)
+        if not extracted[0]:  # No match
+            logger.warning("No pattern match for recovery message")
+            return
+        triggered_message = extracted
+        if is_recovery_cached(triggered_message, original_message):
+            logger.info("Skipping duplicate recovery")
+            return
         is_resolved = "resolved" in original_message and any(trigger in original_message for trigger in triggers)
         skip = False
         entry = None
         try:
-            if triggered_message[1] in recent_messages_cache and triggered_message[0] in recent_messages_cache[triggered_message[1]]:
-                entry = recent_messages_cache[triggered_message[1]][triggered_message[0]]
+            service = triggered_message[1]
+            full_key = triggered_message[0]
+            if service in recent_messages_cache and full_key in recent_messages_cache[service]:
+                entry = recent_messages_cache[service][full_key]
                 if is_resolved and entry['trigger_count'] < 3 :
                     skip = True
                     logger.info("Skipping due to trigger count < 3: {}".format(entry['trigger_count']))
         except Exception:
             pass
         if not skip:
-            logger.info("Resetting message: {}".format(original_message))
+            logger.info("Processing recovery: {}".format(original_message))
             permalink = get_permalink(channel_id, message_ts)
             source = {
                 'name': channel_name,
@@ -294,8 +317,10 @@ def handle_filtered_message(message, client, event_message, event_channel, event
                 if not entry['recovered']:
                     post_recovery_message(original_message, entry['source_channels'], target_channel_id)
                     entry['recovered'] = True
+                    update_recovered_cache(triggered_message)
             else:
                 post_recovery_message(original_message, [source], target_channel_id)
+                update_recovered_cache(triggered_message)
             reset_sequence(triggered_message, original_message)
         else:
             logger.info("Skipped recovery message: {}".format(original_message))
@@ -303,6 +328,7 @@ def handle_filtered_message(message, client, event_message, event_channel, event
 try:
     app = App(token=bot_token)
     recent_messages_cache = {}
+    recovered_alerts = {}
 except Exception as err:
     logger.error('{}'.format(err))
 else:
