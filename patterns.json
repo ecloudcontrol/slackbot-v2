@@ -1,39 +1,42 @@
 {
   "include_patterns": [
 
-    "(?i)prod\\s+parser\\s+is\\s+down",
-    "(?i)[a-z0-9_-]+\\s+prod\\s+parser\\s+is\\s+down",
-    "(?i)parser\\s+is\\s+down\\s+on\\s+source:[\\w-]+",
+    "(?i)(triggered|recovered).*prod\\s+parser\\s+is\\s+down",
+    "(?i)(triggered|recovered).*\\b[a-z0-9_-]+\\s+prod\\s+parser\\s+is\\s+down",
+    "(?i)(triggered|recovered).*parser\\s+is\\s+down\\s+on\\s+source[:\\s]+[\\w-]+",
 
-    "(?i)signer\\s+error",
-    "(?i)prod-\\s*signer\\s+is\\s+down",
+    "(?i)(triggered|recovered).*signer\\s+error",
+    "(?i)(triggered|recovered).*prod[-\\s]*signer\\s+is\\s+down",
 
-    "(?i)consolidation\\s+api\\s+failure\\s*,?\\s*env\\s+prod",
+    "(?i)(triggered|recovered).*consolidation\\s+api\\s+failure.*prod",
 
-    "(?i)load\\s+balancer\\s+latency\\s+increased",
-    "(?i)load\\s+balancer\\s+tls\\s+negotiation\\s+error",
-    "(?i)load\\s+balancer\\s+5xx\\s+errors",
-    "(?i)prod\\s+lb\\s+request\\s+count\\s+drop",
+    "(?i)(triggered|recovered).*load\\s+balancer\\s+latency\\s+increased",
+    "(?i)(triggered|recovered).*load\\s+balancer\\s+tls\\s+negotiation\\s+error",
+    "(?i)(triggered|recovered).*load\\s+balancer\\s+5xx\\s+errors",
+    "(?i)(triggered|recovered).*prod\\s+lb\\s+request\\s+count\\s+drop",
 
-    "(?i)[a-z0-9_-]+\\s+increased\\s+lag\\s+on\\s+kafka",
-    "(?i)base\\s+prod\\s+increased\\s+lag",
+    "(?i)(triggered|recovered).*increased\\s+lag\\s+on\\s+kafka",
+    "(?i)(triggered|recovered).*kafka\\s+lag",
 
-    "(?i)msk\\s+cpu\\s+system\\s+usage\\s+high\\s+on\\s+broker_id:\\d+",
+    "(?i)(triggered|recovered).*msk\\s+cpu\\s+system\\s+usage\\s+high",
+    "(?i)(triggered|recovered).*msk.*cpu.*high",
 
-    "(?i)pods\\s+cpu\\s+utilization\\s+in\\s+k8s\\s+deployment\\s+on\\s+kube_deployment:[\\w-]+",
-    "(?i)pod\\s+restart\\s+for\\s+k8s\\s+deployments\\s+on\\s+kube_deployment:[\\w-]+",
+    "(?i)(triggered|recovered).*pods?\\s+cpu\\s+utilization\\s+in\\s+k8s",
+    "(?i)(triggered|recovered).*pod\\s+restart.*k8s",
+    "(?i)(triggered|recovered).*memory\\s+utili[sz]ation\\s+of\\s+k8s",
 
-    "(?i)memory\\s+utilisation\\s+of\\s+k8s\\s+deployments\\s+on\\s+kube_deployment:[\\w-]+",
+    "(?i)(triggered|recovered).*cpu\\s+load\\s+is\\s+very\\s+high",
+    "(?i)(triggered|recovered).*db\\s+load\\s+is\\s+very\\s+high",
 
-    "(?i)cpu\\s+load\\s+is\\s+very\\s+high\\s+on.*",
-    "(?i)db\\s+load\\s+is\\s+very\\s+high\\s+on.*",
+    "(?i)(triggered|recovered).*\\baws\\b.*rds.*cpu.*high",
+    "(?i)(triggered|recovered).*\\baws\\b.*rds.*storage.*high",
+    "(?i)(triggered|recovered).*\\baws\\b.*rds.*freeable.*memory",
+    "(?i)(triggered|recovered).*\\baws\\b.*rds.*connections",
 
-    "(?i)\\[aws\\]\\s+rds\\s+cpu\\s+utilization\\s+is\\s+high\\s+on\\s+dbinstanceidentifier:[\\w-]+",
-    "(?i)\\[aws\\]\\s+rds\\s+storage\\s+utilization\\s+is\\s+high\\s+on\\s+dbinstanceidentifier:[\\w-]+",
-    "(?i)\\[aws\\]\\s+rds\\s+freeable\\s+memory\\s+alert\\s+on\\s+dbinstanceidentifier:[\\w-]+",
-    "(?i)\\[aws\\]\\s+rds\\s+anomaly\\s+in\\s+database\\s+connections\\s+on\\s+dbinstanceidentifier:[\\w-]+",
+    "(?i)(triggered|recovered).*full\\s*node\\s*down",
+    "(?i)(triggered|recovered).*node\\s+down",
+    "(?i)(triggered|recovered).*instance\\s+down",
 
-    "(?i)prod\\s*-\\s*full\\s*node\\s*down\\s*-\\s*prod",
-    "(?i)issue[\\s\\S]+"
+    "(?i)(issue)(.+)\\n(.+)\\n(.+)"
   ]
 }
