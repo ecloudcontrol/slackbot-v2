@@ -8,6 +8,12 @@
     "(?i)signer\\s+error",
     "(?i)prod-\\s*signer\\s+is\\s+down",
 
+     "(?i)thales\\s+is\\s+down\\s*-?\\s*prod",
+  "(?i)kms\\s+permission\\s+error\\s+in\\s+liminal[-\\s]?signer",
+  "(?i)mpc\\s+tsm\\s+operation\\s+failed",
+  "(?i)balance\\s+low\\s+in\\s+solana\\s+nonce\\s+wallet",
+  "(?i)chainparser\\s+decreased\\s+blocks\\s+sync\\s*\\(bn?b\\)",
+
     "(?i)consolidation\\s+api\\s+failure\\s*,?\\s*env\\s+prod",
 
     "(?i)load\\s+balancer\\s+latency\\s+increased",
