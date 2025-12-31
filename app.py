@@ -46,7 +46,9 @@ TIME_WINDOWS = {
     "Re-Triggered": timedelta(minutes=60),
     "Warn": timedelta(minutes=15),
     "Recovered": timedelta(minutes=5),
+
 }
+COLLECTION_WINDOW = timedelta(seconds=10)
 
 STATE_COLORS = {
     "Triggered": "#E01E5A",
@@ -142,21 +144,22 @@ def should_forward_alert(alert_name, state, channel_id):
         {
             "states": {},
             "channels": set(),
-            "incident_active": False,
             "first_seen": now,
+            "incident_active": False,
         }
     )
 
+    # Always record channel
     entry["channels"].add(channel_id)
 
-    if state == "Warn" and entry["incident_active"]:
-        return False
-
-    if state == "Recovered" and not entry["incident_active"]:
-        return False
+    # Delay sending until collection window ends
+    if state == "Triggered":
+        if (now - entry["first_seen"]) < COLLECTION_WINDOW:
+            return False
 
     last_seen = entry["states"].get(state)
     window = TIME_WINDOWS.get(state)
+
     if last_seen and window and (now - last_seen) <= window:
         return False
 
