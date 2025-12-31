@@ -37,6 +37,8 @@ if not all([app_token, bot_token, target_channel_id, channel_ids]):
     logger.error("Missing required environment variables. Aborting.")
     sys.exit(1)
 
+logger.info("Environment loaded successfully")
+
 # ---------------- SLACK APP ---------------- #
 app = App(token=bot_token)
 
@@ -46,8 +48,8 @@ TIME_WINDOWS = {
     "Re-Triggered": timedelta(minutes=60),
     "Warn": timedelta(minutes=15),
     "Recovered": timedelta(minutes=5),
-
 }
+
 STATE_COLORS = {
     "Triggered": "#E01E5A",
     "Re-Triggered": "#E01E5A",
@@ -69,6 +71,7 @@ ZABBIX_REGEX = re.compile(
     r"Name:\s*(.+?)\n"
     r"Server:\s*(.+?)(?:\n|$)"
 )
+
 # ---------------- PATTERNS ---------------- #
 def load_filter_patterns(path):
     try:
@@ -87,20 +90,16 @@ def now_utc():
     return datetime.utcnow()
 
 def extract_alert(text):
-    # Datadog / standard alerts
     match = ALERT_REGEX.search(text)
     if match:
         state = match.group(1).title()
         alert_name = match.group(2).split("\n")[0].strip()
+        logger.info("Standard alert parsed | state=%s alert=%s", state, alert_name)
         return state, alert_name
 
-    # Zabbix alerts
     return extract_zabbix_alert(text)
 
 def extract_zabbix_alert(text):
-    """
-    Parses Zabbix alerts and maps them to internal states.
-    """
     match = ZABBIX_REGEX.search(text)
     if not match:
         return None, None
@@ -116,11 +115,16 @@ def extract_zabbix_alert(text):
     else:
         return None, None
 
-    # Prevent cross-host alert collision
     full_alert_name = f"{alert_name} ({server})"
+    logger.info(
+        "Zabbix alert parsed | state=%s alert=%s server=%s",
+        state,
+        alert_name,
+        server,
+    )
 
     return state, full_alert_name
-    
+
 def get_permalink(channel_id, message_ts):
     try:
         r = app.client.chat_getPermalink(
@@ -150,14 +154,17 @@ def should_forward_alert(alert_name, state, channel_id):
     entry["channels"].add(channel_id)
 
     if state == "Warn" and entry["incident_active"]:
+        logger.info("Alert suppressed | reason=warn_during_active_incident")
         return False
 
     if state == "Recovered" and not entry["incident_active"]:
+        logger.info("Alert suppressed | reason=recovery_without_active_incident")
         return False
 
     last_seen = entry["states"].get(state)
     window = TIME_WINDOWS.get(state)
     if last_seen and window and (now - last_seen) <= window:
+        logger.info("Alert suppressed | reason=time_window state=%s", state)
         return False
 
     entry["states"][state] = now
@@ -166,12 +173,20 @@ def should_forward_alert(alert_name, state, channel_id):
         entry["incident_active"] = True
 
     return True
+
 def format_sources(alert_name):
     chans = recent_messages_cache.get(alert_name, {}).get("channels", set())
     return ", ".join(f"<#{c}>" for c in sorted(chans))
 
 # ---------------- SEND MESSAGE ---------------- #
 def send_to_target(original_message, channel_id, message_ts, state, alert_name):
+    logger.info(
+        "Forwarding alert | state=%s alert=%s source_channel=%s",
+        state,
+        alert_name,
+        channel_id,
+    )
+
     permalink = get_permalink(channel_id, message_ts)
     sources = format_sources(alert_name)
     emoji = STATE_EMOJIS.get(state, "")
@@ -194,18 +209,29 @@ def send_to_target(original_message, channel_id, message_ts, state, alert_name):
             ],
             unfurl_links=False,
         )
+        logger.info("Alert sent successfully to target channel")
     except Exception as e:
         logger.error(f"Send failed: {e}")
+
 # ---------------- CORE HANDLER ---------------- #
 def handle_alert(original_message, channel_id, message_ts):
+    logger.info(
+        "Message received | channel=%s ts=%s",
+        channel_id,
+        message_ts,
+    )
+
     state, alert_name = extract_alert(original_message)
     if not state or not alert_name:
+        logger.info("Message ignored | reason=not_an_alert")
         return
 
     if channel_id not in channel_ids:
+        logger.info("Alert ignored | reason=channel_not_allowed")
         return
 
     if any(re.search(p, original_message, re.IGNORECASE) for p in exclude_patterns):
+        logger.info("Alert ignored | reason=exclude_pattern")
         return
 
     if not should_forward_alert(alert_name, state, channel_id):
@@ -215,6 +241,7 @@ def handle_alert(original_message, channel_id, message_ts):
 
     if state == "Recovered":
         recent_messages_cache.pop(alert_name, None)
+        logger.info("Incident cleared | alert=%s", alert_name)
 
 # ---------------- MESSAGE HANDLERS ---------------- #
 @app.message(re.compile("|".join(include_patterns), re.IGNORECASE))
@@ -241,9 +268,7 @@ def handle_attachment_messages(event, say):
         if any(re.search(p, alert_text, re.IGNORECASE) for p in include_patterns):
             handle_alert(alert_text, channel_id, event["ts"])
 
-
-
 # ---------------- MAIN ---------------- #
 if __name__ == "__main__":
-    logger.info("Starting Slackbot with lifecycle + confirmation button")
+    logger.info("Starting Slackbot with lifecycle-based alert forwarding")
     SocketModeHandler(app, app_token).start()
