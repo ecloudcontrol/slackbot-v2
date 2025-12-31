@@ -185,17 +185,6 @@ def send_to_target(original_message, channel_id, message_ts, state, alert_name):
         }
     ]
 
-    # ✅ Add interactive button (NOT for Recovered)
-    if state != "Recovered":
-        blocks[0]["accessory"] = {
-            "type": "button",
-            "text": {"type": "plain_text", "text": "Have you fixed it?"},
-            "action_id": "button_click",
-            "value": json.dumps(
-                {"channel_id": channel_id, "message_ts": message_ts}
-            ),
-        }
-
     try:
         app.client.chat_postMessage(
             channel=target_channel_id,
@@ -207,7 +196,6 @@ def send_to_target(original_message, channel_id, message_ts, state, alert_name):
         )
     except Exception as e:
         logger.error(f"Send failed: {e}")
-
 # ---------------- CORE HANDLER ---------------- #
 def handle_alert(original_message, channel_id, message_ts):
     state, alert_name = extract_alert(original_message)
@@ -253,20 +241,7 @@ def handle_attachment_messages(event, say):
         if any(re.search(p, alert_text, re.IGNORECASE) for p in include_patterns):
             handle_alert(alert_text, channel_id, event["ts"])
 
-# ---------------- BUTTON ACTION ---------------- #
-@app.action("button_click")
-def handle_button_click(ack, body, client, logger):
-    ack()
-    try:
-        payload = json.loads(body["actions"][0]["value"])
-        client.reactions_add(
-            channel=payload["channel_id"],
-            timestamp=payload["message_ts"],
-            name="white_check_mark",
-        )
-        logger.info("white_check_mark added via button click")
-    except Exception as e:
-        logger.error(f"Reaction failed: {e}")
+
 
 # ---------------- MAIN ---------------- #
 if __name__ == "__main__":
