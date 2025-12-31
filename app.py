@@ -48,7 +48,7 @@ TIME_WINDOWS = {
     "Recovered": timedelta(minutes=5),
 
 }
-COLLECTION_WINDOW = timedelta(seconds=30)
+COLLECTION_WINDOW = timedelta(seconds=20)
 
 STATE_COLORS = {
     "Triggered": "#E01E5A",
