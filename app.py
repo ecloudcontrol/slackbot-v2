@@ -58,7 +58,6 @@ STATE_COLORS = {
 }
 
 STATE_EMOJIS = {
-    "Recovered": "✅",
 }
 
 ALERT_REGEX = re.compile(
@@ -191,7 +190,7 @@ def send_to_target(original_message, channel_id, message_ts, state, alert_name):
     sources = format_sources(alert_name)
     emoji = STATE_EMOJIS.get(state, "")
 
-    text = f"{emoji} <{permalink}|{original_message}>\nSources: {sources}"
+    text = f"{emoji} *<{permalink}|{original_message}>*\nSources: {sources}"
 
     blocks = [
         {
